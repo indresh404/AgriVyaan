@@ -1,0 +1,109 @@
+{
+  "field": {
+    "width_m": 100.0,
+    "height_m": 100.0,
+    "base_position": [0.0, 0.0]
+  },
+  "tasks": [
+    {
+      "id": 0,
+      "position": [15.0, 20.0],
+      "priority": 0.9,
+      "uncertainty": 0.4,
+      "expected_gain": 0.8,
+      "duration_s": 15.0,
+      "inspection_energy_eu": 7.5,
+      "status": "PENDING"
+    },
+    {
+      "id": 1,
+      "position": [25.0, 75.0],
+      "priority": 0.7,
+      "uncertainty": 0.6,
+      "expected_gain": 0.65,
+      "duration_s": 20.0,
+      "inspection_energy_eu": 10.0,
+      "status": "PENDING"
+    },
+    {
+      "id": 2,
+      "position": [40.0, 30.0],
+      "priority": 0.85,
+      "uncertainty": 0.3,
+      "expected_gain": 0.75,
+      "duration_s": 12.0,
+      "inspection_energy_eu": 6.0,
+      "status": "PENDING"
+    },
+    {
+      "id": 3,
+      "position": [55.0, 85.0],
+      "priority": 0.6,
+      "uncertainty": 0.8,
+      "expected_gain": 0.7,
+      "duration_s": 25.0,
+      "inspection_energy_eu": 12.5,
+      "status": "PENDING"
+    },
+    {
+      "id": 4,
+      "position": [60.0, 15.0],
+      "priority": 0.95,
+      "uncertainty": 0.2,
+      "expected_gain": 0.9,
+      "duration_s": 10.0,
+      "inspection_energy_eu": 5.0,
+      "status": "PENDING"
+    },
+    {
+      "id": 5,
+      "position": [70.0, 60.0],
+      "priority": 0.5,
+      "uncertainty": 0.5,
+      "expected_gain": 0.5,
+      "duration_s": 18.0,
+      "inspection_energy_eu": 9.0,
+      "status": "PENDING"
+    },
+    {
+      "id": 6,
+      "position": [80.0, 25.0],
+      "priority": 0.75,
+      "uncertainty": 0.4,
+      "expected_gain": 0.7,
+      "duration_s": 22.0,
+      "inspection_energy_eu": 11.0,
+      "status": "PENDING"
+    },
+    {
+      "id": 7,
+      "position": [85.0, 90.0],
+      "priority": 0.4,
+      "uncertainty": 0.7,
+      "expected_gain": 0.55,
+      "duration_s": 30.0,
+      "inspection_energy_eu": 15.0,
+      "status": "PENDING"
+    },
+    {
+      "id": 8,
+      "position": [30.0, 45.0],
+      "priority": 0.65,
+      "uncertainty": 0.5,
+      "expected_gain": 0.6,
+      "duration_s": 16.0,
+      "inspection_energy_eu": 8.0,
+      "status": "PENDING"
+    },
+    {
+      "id": 9,
+      "position": [90.0, 40.0],
+      "priority": 0.8,
+      "uncertainty": 0.3,
+      "expected_gain": 0.72,
+      "duration_s": 14.0,
+      "inspection_energy_eu": 7.0,
+      "status": "PENDING"
+    }
+  ]
+}

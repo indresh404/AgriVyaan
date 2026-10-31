@@ -1,0 +1,30 @@
+{
+  "field": {
+    "width_m": 100.0,
+    "height_m": 100.0,
+    "base": [0.0, 0.0]
+  },
+  "tasks": {
+    "count": 10,
+    "duration_s": [10.0, 30.0],
+    "inspect_rate_eu_per_s": 0.5
+  },
+  "drones": {
+    "count": 3,
+    "speed_mps": 5.0,
+    "energy_capacity_eu": 500.0,
+    "return_reserve_fraction": 0.2,
+    "travel_rate_eu_per_m": 1.0,
+    "safety_factor": 1.1
+  },
+  "simulation": {
+    "dt_s": 0.5,
+    "max_sim_time_s": 3600.0,
+    "seed": 42,
+    "record_every_n_steps": 4
+  },
+  "failures": [],
+  "visualization": {
+    "enabled": true
+  }
+}

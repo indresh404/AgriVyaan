@@ -1,0 +1,286 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+  <title>Optix FPV Ground Control</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div class="app-container">
+    <!-- Top Tactical Navigation & Tools Bar (All main tools at top) -->
+    <header class="fpv-top-bar">
+      <div class="top-bar-left">
+        <div class="brand-zone">
+          <span class="brand-name">OPTIX</span>
+          <span class="brand-sub">FPV</span>
+          <span id="connStatusDot" class="status-dot dot-red"></span>
+          <span id="connStatusText" class="status-label">Offline</span>
+        </div>
+        <div class="ping-badge" id="pingBadge" title="Latency">
+          <span id="pingValue">-- ms</span>
+        </div>
+      </div>
+
+      <!-- Quick Action Tool Buttons at Top -->
+      <div class="top-bar-tools">
+        <!-- Stream Start/Stop Toggle Button -->
+        <button id="btnStreamToggle" class="btn-top btn-stream-stop" onclick="toggleStreamState()">
+          <span class="btn-icon">⏹</span>
+          <span class="btn-text" id="btnStreamText">STOP STREAM</span>
+        </button>
+
+        <!-- Camera Source (Phone / USB Webcam / Dual) -->
+        <button id="btnCamSource" class="btn-top" onclick="cycleCameraSource()" title="Switch Camera: Phone / USB Webcam / Dual">
+          <span class="btn-icon">📹</span>
+          <span class="btn-text" id="btnCamSourceText">CAM: PHONE</span>
+        </button>
+
+        <!-- Flip Lens -->
+        <button id="btnQuickFlip" class="btn-top" onclick="switchCamera()" title="Switch Front/Rear Lens">
+          <span class="btn-icon">🔄</span>
+          <span class="btn-text">FLIP</span>
+        </button>
+
+        <!-- Airplane Beacon Strobe -->
+        <button id="btnStrobe" class="btn-top btn-strobe" onclick="toggleStrobe()" title="Airplane Double-Pulse Strobe Beacon">
+          <span class="btn-icon">⚡</span>
+          <span class="btn-text">BEACON</span>
+        </button>
+
+        <!-- Torch -->
+        <button id="btnTorch" class="btn-top" onclick="toggleTorch()" title="Continuous Flashlight">
+          <span class="btn-icon">🔦</span>
+          <span class="btn-text">TORCH</span>
+        </button>
+
+        <!-- Snapshot -->
+        <button id="btnQuickSnap" class="btn-top" onclick="captureSnapshot()" title="Capture High-Res Photo">
+          <span class="btn-icon">📸</span>
+          <span class="btn-text">SNAP</span>
+        </button>
+
+        <!-- Fit / Full View Toggle -->
+        <button id="btnQuickFit" class="btn-top" onclick="toggleVideoFit()" title="Toggle Full Clear View (16:9) vs Edge-to-Edge Fill">
+          <span class="btn-icon">🔲</span>
+          <span class="btn-text" id="btnFitText">FIT/FILL</span>
+        </button>
+
+        <!-- FPV Reticle Crosshair Toggle -->
+        <button id="btnToggleReticle" class="btn-top active" onclick="toggleReticle()" title="Toggle FPV Crosshair">
+          <span class="btn-icon">🎯</span>
+          <span class="btn-text">HUD</span>
+        </button>
+
+        <!-- All Tools & Settings Drawer Toggle -->
+        <button id="btnOpenDrawer" class="btn-top btn-drawer-toggle" onclick="toggleToolsDrawer()" title="Open Controls & Settings Drawer">
+          <span class="btn-icon">⚙</span>
+          <span class="btn-text">CONTROLS</span>
+        </button>
+      </div>
+    </header>
+
+    <!-- Main Viewport Section (Full screen 100% video display) -->
+    <main class="viewport-section" id="viewport">
+      <div id="videoContainer" class="video-container mode-phone">
+        <!-- Phone Camera Video -->
+        <div class="video-wrapper" id="wrapperPhone">
+          <video id="remoteVideoPhone" autoplay playsinline muted></video>
+        </div>
+
+        <!-- USB Webcam Video -->
+        <div class="video-wrapper" id="wrapperUsb">
+          <video id="remoteVideoUsb" autoplay playsinline muted></video>
+        </div>
+
+        <!-- Tap-To-Focus Marker -->
+        <div id="focusRing" class="focus-ring"></div>
+
+        <!-- FPV On-Screen Display (OSD) Overlay: Directly on top of camera footage -->
+        <div class="fpv-osd-layer" id="fpvOsdLayer">
+          <!-- Top Left OSD: Battery, Voltage, Temperature, Screen Status -->
+          <div class="osd-corner osd-top-left">
+            <div class="osd-pill" id="osdBattPill">
+              <span class="osd-icon">🔋</span>
+              <span id="battLevel">--%</span>
+              <span class="osd-sub" id="osdVolts">4.1V</span>
+            </div>
+            <div class="osd-pill" id="osdTempPill">
+              <span class="osd-icon">🌡️</span>
+              <span id="devTemp">--°C</span>
+            </div>
+            <div class="osd-pill" id="osdScreenPill">
+              <span class="osd-icon">📱</span>
+              <span id="screenState">SCR ON</span>
+            </div>
+          </div>
+
+          <!-- Top Right OSD: Wi-Fi Signal, Flight/Stream Timer, Bitrate -->
+          <div class="osd-corner osd-top-right">
+            <div class="osd-pill osd-wifi" id="osdWifiPill">
+              <span class="osd-icon">📶</span>
+              <span id="wifiSignal">Wi-Fi: --%</span>
+            </div>
+            <div class="osd-pill osd-timer-pill" id="osdTimerPill">
+              <span class="osd-rec-dot"></span>
+              <span id="streamTimer">00:00:00</span>
+            </div>
+            <div class="osd-pill">
+              <span class="osd-icon">⚡</span>
+              <span id="statBitrate">-- kbps</span>
+            </div>
+          </div>
+
+          <!-- Center Tactical FPV Crosshair Reticle -->
+          <div class="fpv-reticle-center" id="fpvReticle">
+            <div class="reticle-box">
+              <div class="reticle-bracket top-left"></div>
+              <div class="reticle-bracket top-right"></div>
+              <div class="reticle-bracket bottom-left"></div>
+              <div class="reticle-bracket bottom-right"></div>
+              <div class="reticle-crosshair"></div>
+              <div class="reticle-horizon"></div>
+            </div>
+          </div>
+
+          <!-- Bottom Left OSD: Live Resolution, FPS, Active Camera Mode -->
+          <div class="osd-corner osd-bottom-left">
+            <div class="osd-pill">
+              <span class="osd-icon">📹</span>
+              <span id="statResFps">Initializing feed...</span>
+            </div>
+            <div class="osd-pill osd-mode-tag" id="osdActiveMode">
+              [ REAR CAMERA ]
+            </div>
+          </div>
+
+          <!-- Bottom Right OSD: Zoom Level & Mount Rotation -->
+          <div class="osd-corner osd-bottom-right">
+            <div class="osd-pill">
+              <span class="osd-icon">🔍</span>
+              <span id="osdZoom">1.0X</span>
+            </div>
+            <div class="osd-pill">
+              <span class="osd-icon">↺</span>
+              <span id="osdRotation">0°</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Placeholder while stream initializes or when stopped -->
+        <div id="videoPlaceholder" class="video-placeholder">
+          <div class="radar-scan"></div>
+          <h2 id="placeholderTitle">CONNECTING TO DRONE CAMERA...</h2>
+          <p id="placeholderText">Opening live feed from Samsung Galaxy M31</p>
+          <button id="btnQuickStart" class="btn btn-success" style="margin-top:16px;" onclick="startStream()">▶ Open Live Stream</button>
+        </div>
+
+        <!-- Floating Quick Viewport Controls (Bottom-Right of Video) -->
+        <div class="viewport-quick-tools">
+          <button class="hud-icon-btn" onclick="toggleDualLayout()" id="btnDualLayout" title="Toggle Side-by-Side / Picture-in-Picture">◫</button>
+          <button class="hud-icon-btn" onclick="toggleVideoFit()" id="btnFitMode" title="Toggle Aspect Fit / Fill">🔲</button>
+          <button class="hud-icon-btn" onclick="toggleFullscreen()" title="Toggle Fullscreen">⛶</button>
+          <button class="hud-icon-btn" onclick="toggleAudio()" id="btnMute" title="Toggle Audio">🔇</button>
+        </div>
+      </div>
+    </main>
+
+    <!-- Slide-Out Tactical Controls & Tools Drawer -->
+    <div class="drawer-backdrop" id="drawerBackdrop" onclick="closeToolsDrawer()"></div>
+    <aside class="tools-drawer" id="toolsDrawer">
+      <div class="drawer-header">
+        <div class="drawer-title">
+          <span class="drawer-badge">FPV STATION</span>
+          <span>FLIGHT CONTROLS</span>
+        </div>
+        <button class="btn-close-drawer" onclick="closeToolsDrawer()">✕</button>
+      </div>
+
+      <div class="drawer-content">
+        <!-- Camera Stream Mode Selection -->
+        <div class="drawer-section">
+          <span class="section-title">CAMERA SOURCE</span>
+          <div class="btn-cluster">
+            <button class="btn btn-mode active" id="btnModePhone" onclick="switchStreamMode('PHONE')">Phone Cam</button>
+            <button class="btn btn-mode" id="btnModeUsb" onclick="switchStreamMode('USB')">USB Webcam</button>
+            <button class="btn btn-mode" id="btnModeBoth" onclick="switchStreamMode('BOTH')">Dual (Both)</button>
+          </div>
+          <button class="btn btn-action" onclick="requestUsbPermission()" style="margin-top:6px; width:100%; font-size:0.75rem;">🔌 Request USB OTG Permission</button>
+        </div>
+
+        <!-- Zoom Slider with Precision Steps -->
+        <div class="drawer-section">
+          <div class="section-title-row">
+            <span class="section-title">DIGITAL ZOOM</span>
+            <span class="value-badge" id="lblZoom">1.0x</span>
+          </div>
+          <div class="zoom-bar">
+            <button class="hud-btn-step" onclick="stepZoom(-0.5)">-</button>
+            <input type="range" id="zoomSlider" min="1.0" max="6.0" step="0.1" value="1.0" oninput="onZoomSlider(this.value)">
+            <button class="hud-btn-step" onclick="stepZoom(0.5)">+</button>
+            <button class="hud-btn-step btn-reset" onclick="resetZoom()" title="Reset Zoom">1x</button>
+          </div>
+        </div>
+
+        <!-- Mount Rotation -->
+        <div class="drawer-section">
+          <span class="section-title">MOUNT ROTATION</span>
+          <div class="btn-cluster">
+            <button class="btn btn-mini active" id="btnRot0" onclick="setRotation(0)">0°</button>
+            <button class="btn btn-mini" id="btnRot90" onclick="setRotation(90)">90°</button>
+            <button class="btn btn-mini" id="btnRot180" onclick="setRotation(180)">180°</button>
+            <button class="btn btn-mini" id="btnRot270" onclick="setRotation(270)">270°</button>
+          </div>
+        </div>
+
+        <!-- Dynamic Audio Alerts / Sirens (Phone Speaker) -->
+        <div class="drawer-section" id="soundGroup">
+          <span class="section-title">AUDIO ALERTS (PHONE SPEAKER)</span>
+          <div class="btn-cluster" id="soundBtnCluster">
+            <span style="font-size:0.75rem; color:#8b9bb4; padding: 4px;">Loading sounds...</span>
+          </div>
+        </div>
+
+        <!-- Quality Presets -->
+        <div class="drawer-section">
+          <span class="section-title">STREAM RESOLUTION</span>
+          <div class="btn-cluster">
+            <button class="btn btn-preset active" onclick="setQuality(1280, 720, 30)">720p 30fps</button>
+            <button class="btn btn-preset" onclick="setQuality(1920, 1080, 30)">1080p FHD</button>
+            <button class="btn btn-preset" onclick="setQuality(640, 480, 30)">480p SD</button>
+          </div>
+        </div>
+
+        <!-- Remote Phone Power & Display -->
+        <div class="drawer-section">
+          <span class="section-title">REMOTE PHONE HARDWARE</span>
+          <div class="btn-cluster">
+            <button class="btn btn-action" onclick="sendCommand('wake_screen')">☀️ Wake Screen</button>
+            <button class="btn btn-action" onclick="sendCommand('lock_screen')">🌙 Lock Screen</button>
+          </div>
+        </div>
+
+        <!-- HUD & Display Settings -->
+        <div class="drawer-section">
+          <span class="section-title">HUD DISPLAY OPTIONS</span>
+          <div class="btn-cluster">
+            <button class="btn btn-toggle active" id="btnToggleOsd" onclick="toggleOsdTelemetry()">Telemetry OSD</button>
+            <button class="btn btn-toggle active" id="btnToggleReticleDrawer" onclick="toggleReticle()">FPV Crosshair</button>
+          </div>
+        </div>
+
+        <!-- Live Event Console -->
+        <div class="drawer-section console-section">
+          <div class="section-title-row">
+            <span class="section-title">STREAM & SYSTEM LOGS</span>
+            <button class="btn-clear" onclick="clearLogs()">Clear</button>
+          </div>
+          <div id="logOutput" class="log-output"></div>
+        </div>
+      </div>
+    </aside>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>

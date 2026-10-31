@@ -1,0 +1,8 @@
+<resources>
+    <string name="app_name">Optix</string>
+    <string name="channel_name">Optix Streaming Service</string>
+    <string name="channel_description">Keeps Optix camera server and WebRTC stream active in the background</string>
+    <string name="notification_title">Optix Drone Streamer</string>
+    <string name="notification_running">Optix server is running and listening</string>
+    <string name="device_admin_description">Allows remote screen lock from the ground station to conserve battery</string>
+</resources>
