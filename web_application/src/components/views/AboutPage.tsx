@@ -436,7 +436,8 @@ export const AboutPage: React.FC<AboutPageProps> = ({ onBackToDashboard }) => {
   };
 
   const handleBookScanClick = () => {
-    window.open('https://github.com/indresh404/Agri-Vyaan', '_blank', 'noopener,noreferrer');
+    // Navigate to the operator workspace home page
+    window.location.href = '/';
   };
 
   // Hardware Horizontal Scroll Handlers
