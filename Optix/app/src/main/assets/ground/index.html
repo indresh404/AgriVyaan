@@ -30,6 +30,12 @@
           <span class="btn-text" id="btnStreamText">STOP STREAM</span>
         </button>
 
+        <!-- Start / Stop Recording Button -->
+        <button id="btnRecordToggle" class="btn-top btn-rec" onclick="toggleRecording()" title="Start/Stop Local Video Recording on Phone">
+          <span class="btn-icon" id="recIcon">⏺</span>
+          <span class="btn-text" id="btnRecordText">REC</span>
+        </button>
+
         <!-- Camera Source (Phone / USB Webcam / Dual) -->
         <button id="btnCamSource" class="btn-top" onclick="cycleCameraSource()" title="Switch Camera: Phone / USB Webcam / Dual">
           <span class="btn-icon">📹</span>
@@ -117,6 +123,10 @@
 
           <!-- Top Right OSD: Wi-Fi Signal, Flight/Stream Timer, Bitrate -->
           <div class="osd-corner osd-top-right">
+            <div class="osd-pill osd-rec-badge" id="osdRecBadge" style="display:none;">
+              <span class="rec-dot-pulse"></span>
+              <span id="osdRecTimer">REC 00:00:00</span>
+            </div>
             <div class="osd-pill osd-wifi" id="osdWifiPill">
               <span class="osd-icon">📶</span>
               <span id="wifiSignal">Wi-Fi: --%</span>
@@ -260,6 +270,26 @@
           </div>
         </div>
 
+        <!-- Flight Recordings & Footage -->
+        <div class="drawer-section">
+          <div class="section-title-row">
+            <span class="section-title">FLIGHT RECORDINGS & FOOTAGE</span>
+            <button class="btn-clear" onclick="fetchRecordingsList()">🔄 Refresh</button>
+          </div>
+          <div style="margin-bottom:8px;">
+            <button id="btnDrawerRecord" class="btn btn-action btn-drawer-rec" onclick="toggleRecording()" style="width:100%; font-weight:bold;">
+              ⏺ Start Phone Recording
+            </button>
+          </div>
+          <div id="recordingNotice" class="recording-notice" style="display:none;">
+            <span class="rec-dot-pulse"></span>
+            <span id="recordingNoticeText">Local recording active on drone phone</span>
+          </div>
+          <div id="recordingsList" class="recordings-list-box">
+            <span style="font-size:0.75rem; color:#8b9bb4; padding:8px; display:block; text-align:center;">Loading recordings...</span>
+          </div>
+        </div>
+
         <!-- HUD & Display Settings -->
         <div class="drawer-section">
           <span class="section-title">HUD DISPLAY OPTIONS</span>
@@ -279,6 +309,23 @@
         </div>
       </div>
     </aside>
+  </div>
+
+  <!-- Video Preview Modal Dialog -->
+  <div id="videoModal" class="modal-backdrop" style="display:none;" onclick="closeVideoModal(event)">
+    <div class="modal-content" onclick="event.stopPropagation()">
+      <div class="modal-header">
+        <span id="modalVideoTitle" class="modal-title">Recorded Footage</span>
+        <button class="btn-close-modal" onclick="closeVideoModal()">✕</button>
+      </div>
+      <div class="modal-body">
+        <video id="modalVideoPlayer" controls playsinline style="width:100%; max-height:60vh; background:#000; border-radius:6px;"></video>
+      </div>
+      <div class="modal-footer">
+        <a id="btnModalDownload" class="btn btn-success" href="#" download>⬇ Download MP4</a>
+        <button class="btn btn-secondary" onclick="closeVideoModal()">Close</button>
+      </div>
+    </div>
   </div>
 
   <script src="app.js"></script>

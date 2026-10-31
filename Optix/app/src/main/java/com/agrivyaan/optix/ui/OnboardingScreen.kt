@@ -1,6 +1,8 @@
 package com.agrivyaan.optix.ui
 
 import android.Manifest
+import android.app.admin.DevicePolicyManager
+import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
@@ -29,6 +31,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
+import com.agrivyaan.optix.receiver.OptixAdminReceiver
 
 data class CheckItem(
     val id: String,
@@ -42,7 +45,10 @@ data class CheckItem(
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun OnboardingScreen(onBack: () -> Unit) {
+fun OnboardingScreen(
+    onBack: () -> Unit,
+    onRequestDeviceAdmin: () -> Unit = {}
+) {
     val context = LocalContext.current
     var refreshTrigger by remember { mutableStateOf(0) }
 
@@ -56,6 +62,13 @@ fun OnboardingScreen(onBack: () -> Unit) {
     val powerManager = remember { context.getSystemService(Context.POWER_SERVICE) as PowerManager }
     val isBatteryIgnored = remember(refreshTrigger) {
         powerManager.isIgnoringBatteryOptimizations(context.packageName)
+    }
+
+    // Device Admin check for Screen Lock
+    val devicePolicyManager = remember { context.getSystemService(Context.DEVICE_POLICY_SERVICE) as? DevicePolicyManager }
+    val adminComponent = remember { ComponentName(context, OptixAdminReceiver::class.java) }
+    val isDeviceAdminActive = remember(refreshTrigger) {
+        devicePolicyManager?.isAdminActive(adminComponent) == true
     }
 
     // Camera permission check
@@ -122,8 +135,20 @@ fun OnboardingScreen(onBack: () -> Unit) {
             }
         ),
         CheckItem(
+            id = "device_admin",
+            title = "4. Remote Screen Lock (Device Admin)",
+            description = "Required to remotely lock and turn off the screen from the ground station to prevent overheating and save battery.",
+            isAutoDetected = true,
+            isPassed = isDeviceAdminActive,
+            actionLabel = if (isDeviceAdminActive) "Active" else "Enable Admin",
+            onAction = {
+                onRequestDeviceAdmin()
+                refreshTrigger++
+            }
+        ),
+        CheckItem(
             id = "sleeping_apps",
-            title = "4. Samsung: Background Usage Limits",
+            title = "5. Samsung: Background Usage Limits",
             description = "Turn OFF 'Put unused apps to sleep'. Ensure Optix is NOT in Sleeping or Deep Sleeping apps.",
             isAutoDetected = false,
             isPassed = sleepingAppsDone,
@@ -136,7 +161,7 @@ fun OnboardingScreen(onBack: () -> Unit) {
         ),
         CheckItem(
             id = "adaptive_battery",
-            title = "5. Adaptive Battery & Power Saving OFF",
+            title = "6. Adaptive Battery & Power Saving OFF",
             description = "Turn OFF 'Adaptive battery' and 'Power saving mode' during drone flight.",
             isAutoDetected = false,
             isPassed = adaptiveBatteryDone,
@@ -149,7 +174,7 @@ fun OnboardingScreen(onBack: () -> Unit) {
         ),
         CheckItem(
             id = "auto_reset",
-            title = "6. Disable Permission Auto-Reset",
+            title = "7. Disable Permission Auto-Reset",
             description = "Turn OFF 'Remove permissions if app isn't used' in App Info > Permissions.",
             isAutoDetected = false,
             isPassed = autoResetDone,
@@ -165,7 +190,7 @@ fun OnboardingScreen(onBack: () -> Unit) {
         ),
         CheckItem(
             id = "wifi_sleep",
-            title = "7. Wi-Fi Power Saving & Mobile Switch OFF",
+            title = "8. Wi-Fi Power Saving & Mobile Switch OFF",
             description = "Settings > Connections > Wi-Fi > Advanced: Turn OFF 'Switch to mobile data' & Wi-Fi power saving.",
             isAutoDetected = false,
             isPassed = wifiSleepDone,

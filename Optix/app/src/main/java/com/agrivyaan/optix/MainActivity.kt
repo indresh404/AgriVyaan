@@ -2,7 +2,9 @@ package com.agrivyaan.optix
 
 import android.Manifest
 import android.app.PendingIntent
+import android.app.admin.DevicePolicyManager
 import android.content.BroadcastReceiver
+import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
@@ -24,6 +26,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.core.content.ContextCompat
+import com.agrivyaan.optix.receiver.OptixAdminReceiver
 import com.agrivyaan.optix.service.StreamingService
 import com.agrivyaan.optix.ui.MainScreen
 import com.agrivyaan.optix.ui.OnboardingScreen
@@ -52,6 +55,34 @@ class MainActivity : ComponentActivity() {
             startStreamingService()
         } else {
             Toast.makeText(this, "Camera permission is required for Optix streaming!", Toast.LENGTH_LONG).show()
+        }
+    }
+
+    private val deviceAdminLauncher = registerForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) {
+        val dpm = getSystemService(Context.DEVICE_POLICY_SERVICE) as? DevicePolicyManager
+        val admin = ComponentName(this, OptixAdminReceiver::class.java)
+        if (dpm?.isAdminActive(admin) == true) {
+            Toast.makeText(this, "Remote Screen Lock (Device Admin) Granted!", Toast.LENGTH_SHORT).show()
+        }
+        StreamingService.refreshDeviceAdminStatus()
+    }
+
+    fun requestDeviceAdmin() {
+        val adminComponent = ComponentName(this, OptixAdminReceiver::class.java)
+        val intent = Intent(DevicePolicyManager.ACTION_ADD_DEVICE_ADMIN).apply {
+            putExtra(DevicePolicyManager.EXTRA_DEVICE_ADMIN, adminComponent)
+            putExtra(
+                DevicePolicyManager.EXTRA_ADD_EXPLANATION,
+                "Optix requires Device Admin permission to turn off and lock the screen remotely from the ground station to prevent phone overheating and save battery."
+            )
+        }
+        try {
+            deviceAdminLauncher.launch(intent)
+        } catch (e: Exception) {
+            Log.e("MainActivity", "Failed to launch device admin intent", e)
+            Toast.makeText(this, "Error opening Device Admin settings: ${e.message}", Toast.LENGTH_LONG).show()
         }
     }
 
@@ -111,7 +142,8 @@ class MainActivity : ComponentActivity() {
 
                     if (currentScreen == "onboarding") {
                         OnboardingScreen(
-                            onBack = { currentScreen = "main" }
+                            onBack = { currentScreen = "main" },
+                            onRequestDeviceAdmin = { requestDeviceAdmin() }
                         )
                     } else {
                         MainScreen(
@@ -119,7 +151,21 @@ class MainActivity : ComponentActivity() {
                             onStartService = { startStreamingService() },
                             onStopService = { stopStreamingService() },
                             onOpenPreFlight = { currentScreen = "onboarding" },
-                            onDetectUsb = { checkAndRequestUsbPermission() }
+                            onDetectUsb = { checkAndRequestUsbPermission() },
+                            onRequestDeviceAdmin = { requestDeviceAdmin() },
+                            onToggleRecording = {
+                                if (serviceState.isRecording) {
+                                    val f = StreamingService.stopRecording()
+                                    if (f != null) {
+                                        Toast.makeText(this@MainActivity, "Recording saved: ${f.name}", Toast.LENGTH_SHORT).show()
+                                    }
+                                } else {
+                                    val started = StreamingService.startRecording()
+                                    if (started) {
+                                        Toast.makeText(this@MainActivity, "Recording started!", Toast.LENGTH_SHORT).show()
+                                    }
+                                }
+                            }
                         )
                     }
                 }
@@ -130,6 +176,7 @@ class MainActivity : ComponentActivity() {
     override fun onResume() {
         super.onResume()
         checkAndRequestUsbPermission()
+        StreamingService.refreshDeviceAdminStatus()
     }
 
     override fun onDestroy() {

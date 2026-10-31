@@ -145,6 +145,22 @@ class PowerManagerHelper(private val context: Context) {
         }
     }
 
+    fun isDeviceAdminActive(): Boolean {
+        val adminComponent = ComponentName(context, OptixAdminReceiver::class.java)
+        return devicePolicyManager?.isAdminActive(adminComponent) == true
+    }
+
+    fun getRequestDeviceAdminIntent(): Intent {
+        val adminComponent = ComponentName(context, OptixAdminReceiver::class.java)
+        return Intent(DevicePolicyManager.ACTION_ADD_DEVICE_ADMIN).apply {
+            putExtra(DevicePolicyManager.EXTRA_DEVICE_ADMIN, adminComponent)
+            putExtra(
+                DevicePolicyManager.EXTRA_ADD_EXPLANATION,
+                "Optix requires Device Admin permission to turn off and lock the phone screen remotely from the ground station to prevent overheating and save battery during flight."
+            )
+        }
+    }
+
     fun lockScreenNow(): Boolean {
         return try {
             val adminComponent = ComponentName(context, OptixAdminReceiver::class.java)

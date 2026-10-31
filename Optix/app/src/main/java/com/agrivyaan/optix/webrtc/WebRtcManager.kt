@@ -17,18 +17,21 @@ import kotlinx.coroutines.launch
 import org.json.JSONObject
 import org.webrtc.*
 
+import java.util.concurrent.ConcurrentHashMap
+
 enum class StreamMode {
     PHONE, USB, BOTH
 }
 
 class WebRtcManager(
     private val context: Context,
-    private val onSendSignalingMessage: (JSONObject) -> Unit
+    private val onSendSignalingMessage: (clientId: String, JSONObject) -> Unit
 ) {
     private val tag = "WebRtcManager"
     private val scope = CoroutineScope(Dispatchers.Main)
 
     private val eglBase: EglBase = EglBase.create()
+    val eglContext: EglBase.Context get() = eglBase.eglBaseContext
     private var peerConnectionFactory: PeerConnectionFactory? = null
     private var phoneTextureHelper: SurfaceTextureHelper? = null
     private var usbTextureHelper: SurfaceTextureHelper? = null
@@ -46,9 +49,12 @@ class WebRtcManager(
     private var usbVideoTrack: VideoTrack? = null
     private var isUsbConnected = false
 
-    // Active PeerConnection
-    private var peerConnection: PeerConnection? = null
-    private var dataChannel: DataChannel? = null
+    // Hardware recording sink
+    private var recordingSink: VideoSink? = null
+
+    // Active PeerConnections & DataChannels keyed by unique client/viewer ID
+    private val clientPeerConnections = ConcurrentHashMap<String, PeerConnection>()
+    private val clientDataChannels = ConcurrentHashMap<String, DataChannel>()
 
     // State
     private val _isStreaming = MutableStateFlow(false)
@@ -151,6 +157,7 @@ class WebRtcManager(
             phoneVideoTrack = factory.createVideoTrack("OPTIX_PHONE_TRACK", phoneSource).apply {
                 setEnabled(true)
             }
+            attachRecordingSinkToActiveTrack()
             _isStreaming.value = true
         } catch (e: Exception) {
             Log.e(tag, "Error starting phone camera", e)
@@ -172,14 +179,14 @@ class WebRtcManager(
                         put("connected", connected)
                         put("deviceName", name ?: "")
                     }
-                    onSendSignalingMessage(json)
+                    onSendSignalingMessage("*", json)
                 },
                 onCameraReady = {
                     Log.i(tag, "USB Camera is READY with active preview pipeline!")
                     scope.launch(Dispatchers.Main) {
                         if (activeMode == StreamMode.USB || activeMode == StreamMode.BOTH) {
-                            Log.i(tag, "USB Camera ready: starting/updating live stream to client")
-                            startStreamingToClient()
+                            Log.i(tag, "USB Camera ready: starting/updating live stream to all clients")
+                            renegotiateAllClients()
                         }
                     }
                 }
@@ -192,6 +199,7 @@ class WebRtcManager(
             usbVideoTrack = factory.createVideoTrack("OPTIX_USB_TRACK", usbSource).apply {
                 setEnabled(true)
             }
+            attachRecordingSinkToActiveTrack()
             Log.i(tag, "USB Camera pipeline initialized and listening for OTG device")
         } catch (e: Exception) {
             Log.e(tag, "Error starting USB camera pipeline", e)
@@ -226,8 +234,43 @@ class WebRtcManager(
             usbVideoTrack?.setEnabled(true)
         }
 
-        // Renegotiate peer connection with updated tracks
-        startStreamingToClient()
+        // Reattach hardware recording sink to active track
+        attachRecordingSinkToActiveTrack()
+
+        // Renegotiate peer connections for all clients with updated tracks
+        renegotiateAllClients()
+    }
+
+    @Synchronized
+    fun setRecordingSink(sink: VideoSink?) {
+        recordingSink?.let { old ->
+            phoneVideoTrack?.removeSink(old)
+            usbVideoTrack?.removeSink(old)
+        }
+        recordingSink = sink
+        attachRecordingSinkToActiveTrack()
+        Log.i(tag, "Recording sink updated: $sink (activeMode: $activeMode)")
+    }
+
+    private fun attachRecordingSinkToActiveTrack() {
+        val sink = recordingSink ?: return
+        when (activeMode) {
+            StreamMode.PHONE -> {
+                usbVideoTrack?.removeSink(sink)
+                phoneVideoTrack?.removeSink(sink)
+                phoneVideoTrack?.addSink(sink)
+            }
+            StreamMode.USB -> {
+                phoneVideoTrack?.removeSink(sink)
+                usbVideoTrack?.removeSink(sink)
+                usbVideoTrack?.addSink(sink)
+            }
+            StreamMode.BOTH -> {
+                usbVideoTrack?.removeSink(sink)
+                phoneVideoTrack?.removeSink(sink)
+                phoneVideoTrack?.addSink(sink)
+            }
+        }
     }
 
     private fun ensurePhoneCameraCapturing() {
@@ -266,130 +309,133 @@ class WebRtcManager(
         }
     }
 
-    private var streamNegotiationJob: Job? = null
-
     @Synchronized
-    fun startStreamingToClient() {
-        streamNegotiationJob?.cancel()
-        streamNegotiationJob = scope.launch {
-            delay(80) // Debounce and coalesce rapid consecutive stream requests
-            executeStartStreamingToClient()
+    fun startStreamingToClient(clientId: String) {
+        scope.launch {
+            ensureCameraRunning()
+            closeClientConnection(clientId)
+
+            val factory = peerConnectionFactory ?: run {
+                Log.e(tag, "PeerConnectionFactory is null!")
+                return@launch
+            }
+
+            val rtcConfig = PeerConnection.RTCConfiguration(emptyList()).apply {
+                sdpSemantics = PeerConnection.SdpSemantics.UNIFIED_PLAN
+                continualGatheringPolicy = PeerConnection.ContinualGatheringPolicy.GATHER_CONTINUALLY
+            }
+
+            val pc = factory.createPeerConnection(rtcConfig, object : PeerConnection.Observer {
+                override fun onIceCandidate(candidate: IceCandidate?) {
+                    if (candidate != null) {
+                        val json = JSONObject().apply {
+                            put("type", "candidate")
+                            put("candidate", candidate.sdp)
+                            put("sdpMid", candidate.sdpMid)
+                            put("sdpMLineIndex", candidate.sdpMLineIndex)
+                        }
+                        onSendSignalingMessage(clientId, json)
+                    }
+                }
+
+                override fun onIceCandidatesRemoved(candidates: Array<out IceCandidate>?) {}
+                override fun onSignalingChange(state: PeerConnection.SignalingState?) {
+                    Log.d(tag, "[$clientId] SignalingState: $state")
+                }
+                override fun onIceConnectionChange(state: PeerConnection.IceConnectionState?) {
+                    Log.d(tag, "[$clientId] IceConnectionState: $state")
+                }
+                override fun onIceConnectionReceivingChange(receiving: Boolean) {}
+                override fun onIceGatheringChange(state: PeerConnection.IceGatheringState?) {
+                    Log.d(tag, "[$clientId] IceGatheringState: $state")
+                }
+                override fun onAddStream(stream: MediaStream?) {}
+                override fun onRemoveStream(stream: MediaStream?) {}
+                override fun onDataChannel(dc: DataChannel?) {
+                    if (dc != null) clientDataChannels[clientId] = dc
+                }
+                override fun onRenegotiationNeeded() {
+                    Log.d(tag, "[$clientId] Renegotiation needed")
+                }
+                override fun onAddTrack(receiver: RtpReceiver?, mediaStreams: Array<out MediaStream>?) {}
+            }) ?: return@launch
+
+            clientPeerConnections[clientId] = pc
+
+            // Add Video Tracks based on active mode
+            if (activeMode == StreamMode.PHONE || activeMode == StreamMode.BOTH) {
+                phoneVideoTrack?.let { track ->
+                    pc.addTrack(track, listOf("optix_phone_stream"))
+                    Log.i(tag, "Added Phone Video Track for client: $clientId")
+                }
+            }
+
+            if (activeMode == StreamMode.USB || activeMode == StreamMode.BOTH) {
+                usbVideoTrack?.let { track ->
+                    pc.addTrack(track, listOf("optix_usb_stream"))
+                    Log.i(tag, "Added USB Webcam Track for client: $clientId")
+                }
+            }
+
+            // Data Channel for ground controls
+            val dcInit = DataChannel.Init().apply {
+                ordered = true
+                maxRetransmits = -1
+            }
+            val dc = pc.createDataChannel("control", dcInit)
+            if (dc != null) clientDataChannels[clientId] = dc
+
+            // Create Offer with high quality constraints
+            val mediaConstraints = MediaConstraints().apply {
+                mandatory.add(MediaConstraints.KeyValuePair("OfferToReceiveVideo", "false"))
+                mandatory.add(MediaConstraints.KeyValuePair("OfferToReceiveAudio", "false"))
+            }
+
+            pc.createOffer(object : SdpObserver {
+                override fun onCreateSuccess(sdp: SessionDescription?) {
+                    if (sdp == null) return
+                    // Boost video bitrate in SDP for high visual fidelity
+                    val boostedSdp = boostSdpBitrate(sdp.description)
+                    val modifiedDesc = SessionDescription(sdp.type, boostedSdp)
+
+                    pc.setLocalDescription(object : SdpObserver {
+                        override fun onCreateSuccess(desc: SessionDescription?) {}
+                        override fun onSetSuccess() {
+                            Log.i(tag, "Local SDP offer set for $clientId. Transmitting to client...")
+                            val json = JSONObject().apply {
+                                put("type", "offer")
+                                put("sdp", modifiedDesc.description)
+                                put("mode", activeMode.name)
+                            }
+                            onSendSignalingMessage(clientId, json)
+                        }
+                        override fun onCreateFailure(err: String?) {
+                            Log.e(tag, "Set local description failure for $clientId: $err")
+                        }
+                        override fun onSetFailure(err: String?) {
+                            Log.e(tag, "Set local description failure for $clientId: $err")
+                        }
+                    }, modifiedDesc)
+                }
+
+                override fun onSetSuccess() {}
+                override fun onCreateFailure(err: String?) {
+                    Log.e(tag, "Create offer failed for $clientId: $err")
+                }
+                override fun onSetFailure(err: String?) {
+                    Log.e(tag, "Set description failed for $clientId: $err")
+                }
+            }, mediaConstraints)
         }
     }
 
     @Synchronized
-    private fun executeStartStreamingToClient() {
-        ensureCameraRunning()
-        closePeerConnection()
-
-        val factory = peerConnectionFactory ?: run {
-            Log.e(tag, "PeerConnectionFactory is null!")
-            return
+    fun renegotiateAllClients() {
+        val clients = clientPeerConnections.keys.toList()
+        Log.i(tag, "Renegotiating all active viewer clients (${clients.size})...")
+        for (clientId in clients) {
+            startStreamingToClient(clientId)
         }
-
-        val rtcConfig = PeerConnection.RTCConfiguration(emptyList()).apply {
-            sdpSemantics = PeerConnection.SdpSemantics.UNIFIED_PLAN
-            continualGatheringPolicy = PeerConnection.ContinualGatheringPolicy.GATHER_CONTINUALLY
-        }
-
-        peerConnection = factory.createPeerConnection(rtcConfig, object : PeerConnection.Observer {
-            override fun onIceCandidate(candidate: IceCandidate?) {
-                if (candidate != null) {
-                    val json = JSONObject().apply {
-                        put("type", "candidate")
-                        put("candidate", candidate.sdp)
-                        put("sdpMid", candidate.sdpMid)
-                        put("sdpMLineIndex", candidate.sdpMLineIndex)
-                    }
-                    onSendSignalingMessage(json)
-                }
-            }
-
-            override fun onIceCandidatesRemoved(candidates: Array<out IceCandidate>?) {}
-            override fun onSignalingChange(state: PeerConnection.SignalingState?) {
-                Log.d(tag, "SignalingState: $state")
-            }
-            override fun onIceConnectionChange(state: PeerConnection.IceConnectionState?) {
-                Log.d(tag, "IceConnectionState: $state")
-            }
-            override fun onIceConnectionReceivingChange(receiving: Boolean) {}
-            override fun onIceGatheringChange(state: PeerConnection.IceGatheringState?) {
-                Log.d(tag, "IceGatheringState: $state")
-            }
-            override fun onAddStream(stream: MediaStream?) {}
-            override fun onRemoveStream(stream: MediaStream?) {}
-            override fun onDataChannel(dc: DataChannel?) {
-                dataChannel = dc
-            }
-            override fun onRenegotiationNeeded() {
-                Log.d(tag, "Renegotiation needed")
-            }
-            override fun onAddTrack(receiver: RtpReceiver?, mediaStreams: Array<out MediaStream>?) {}
-        })
-
-        // Add Video Tracks based on active mode
-        if (activeMode == StreamMode.PHONE || activeMode == StreamMode.BOTH) {
-            phoneVideoTrack?.let { track ->
-                peerConnection?.addTrack(track, listOf("optix_phone_stream"))
-                Log.i(tag, "Added Phone Video Track to PeerConnection")
-            }
-        }
-
-        if (activeMode == StreamMode.USB || activeMode == StreamMode.BOTH) {
-            usbVideoTrack?.let { track ->
-                peerConnection?.addTrack(track, listOf("optix_usb_stream"))
-                Log.i(tag, "Added USB Webcam Track to PeerConnection")
-            }
-        }
-
-        // Data Channel for ground controls
-        val dcInit = DataChannel.Init().apply {
-            ordered = true
-            maxRetransmits = -1
-        }
-        dataChannel = peerConnection?.createDataChannel("control", dcInit)
-
-        // Create Offer with high quality constraints
-        val mediaConstraints = MediaConstraints().apply {
-            mandatory.add(MediaConstraints.KeyValuePair("OfferToReceiveVideo", "false"))
-            mandatory.add(MediaConstraints.KeyValuePair("OfferToReceiveAudio", "false"))
-        }
-
-        peerConnection?.createOffer(object : SdpObserver {
-            override fun onCreateSuccess(sdp: SessionDescription?) {
-                if (sdp == null) return
-                // Boost video bitrate in SDP for high visual fidelity
-                val boostedSdp = boostSdpBitrate(sdp.description)
-                val modifiedDesc = SessionDescription(sdp.type, boostedSdp)
-
-                peerConnection?.setLocalDescription(object : SdpObserver {
-                    override fun onCreateSuccess(desc: SessionDescription?) {}
-                    override fun onSetSuccess() {
-                        Log.i(tag, "Local SDP offer set (4.5Mbps high-quality). Transmitting to ground...")
-                        val json = JSONObject().apply {
-                            put("type", "offer")
-                            put("sdp", modifiedDesc.description)
-                            put("mode", activeMode.name)
-                        }
-                        onSendSignalingMessage(json)
-                    }
-                    override fun onCreateFailure(err: String?) {
-                        Log.e(tag, "Set local description failure: $err")
-                    }
-                    override fun onSetFailure(err: String?) {
-                        Log.e(tag, "Set local description failure: $err")
-                    }
-                }, modifiedDesc)
-            }
-
-            override fun onSetSuccess() {}
-            override fun onCreateFailure(err: String?) {
-                Log.e(tag, "Create offer failed: $err")
-            }
-            override fun onSetFailure(err: String?) {
-                Log.e(tag, "Set description failed: $err")
-            }
-        }, mediaConstraints)
     }
 
     private fun boostSdpBitrate(sdp: String): String {
@@ -422,39 +468,57 @@ class WebRtcManager(
         return result.joinToString("\r\n")
     }
 
-    fun handleRemoteAnswer(sdpDescription: String) {
+    fun handleRemoteAnswer(clientId: String, sdpDescription: String) {
+        val pc = clientPeerConnections[clientId] ?: run {
+            Log.w(tag, "No PeerConnection found for client $clientId to set remote answer")
+            return
+        }
         val sdp = SessionDescription(SessionDescription.Type.ANSWER, sdpDescription)
-        peerConnection?.setRemoteDescription(object : SdpObserver {
+        pc.setRemoteDescription(object : SdpObserver {
             override fun onCreateSuccess(p0: SessionDescription?) {}
             override fun onSetSuccess() {
-                Log.i(tag, "Remote SDP answer set successfully. Live stream transmitting!")
+                Log.i(tag, "Remote SDP answer set successfully for client $clientId! Live stream transmitting!")
             }
             override fun onCreateFailure(err: String?) {
-                Log.e(tag, "Remote SDP answer error: $err")
+                Log.e(tag, "Remote SDP answer error for $clientId: $err")
             }
             override fun onSetFailure(err: String?) {
-                Log.e(tag, "Remote SDP answer set failure: $err")
+                Log.e(tag, "Remote SDP answer set failure for $clientId: $err")
             }
         }, sdp)
     }
 
-    fun handleRemoteIceCandidate(sdp: String, sdpMid: String?, sdpMLineIndex: Int) {
+    fun handleRemoteIceCandidate(clientId: String, sdp: String, sdpMid: String?, sdpMLineIndex: Int) {
+        val pc = clientPeerConnections[clientId] ?: return
         val candidate = IceCandidate(sdpMid ?: "0", sdpMLineIndex, sdp)
-        peerConnection?.addIceCandidate(candidate)
+        pc.addIceCandidate(candidate)
     }
 
     @Synchronized
-    fun closePeerConnection() {
+    fun closeClientConnection(clientId: String) {
         try {
-            dataChannel?.close()
-            dataChannel?.dispose()
-            dataChannel = null
-
-            peerConnection?.close()
-            peerConnection?.dispose()
-            peerConnection = null
+            clientDataChannels.remove(clientId)?.let { dc ->
+                try {
+                    dc.close()
+                    dc.dispose()
+                } catch (_: Exception) {}
+            }
+            clientPeerConnections.remove(clientId)?.let { pc ->
+                try {
+                    pc.close()
+                    pc.dispose()
+                } catch (_: Exception) {}
+            }
+            Log.i(tag, "Closed PeerConnection for client $clientId. (Remaining active viewers: ${clientPeerConnections.size})")
         } catch (e: Exception) {
-            Log.e(tag, "Error closing PeerConnection", e)
+            Log.e(tag, "Error closing PeerConnection for $clientId", e)
+        }
+    }
+
+    @Synchronized
+    fun closeAllPeerConnections() {
+        for (clientId in clientPeerConnections.keys.toList()) {
+            closeClientConnection(clientId)
         }
     }
 
@@ -584,7 +648,7 @@ class WebRtcManager(
     fun release() {
         strobeJob?.cancel()
         setTorchHardware(false)
-        closePeerConnection()
+        closeAllPeerConnections()
         try {
             phoneCapturer?.stopCapture()
             phoneCapturer?.dispose()

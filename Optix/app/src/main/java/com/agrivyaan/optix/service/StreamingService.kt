@@ -19,6 +19,7 @@ import com.agrivyaan.optix.network.MdnsHelper
 import com.agrivyaan.optix.network.NetworkHelper
 import com.agrivyaan.optix.power.BatteryInfo
 import com.agrivyaan.optix.power.PowerManagerHelper
+import com.agrivyaan.optix.recording.RecordingManager
 import com.agrivyaan.optix.server.ServerManager
 import com.agrivyaan.optix.webrtc.StreamMode
 import com.agrivyaan.optix.webrtc.WebRtcManager
@@ -27,6 +28,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import org.json.JSONObject
+import java.io.File
 
 enum class CameraMode {
     PHONE, USB, BOTH
@@ -40,7 +42,11 @@ data class ServiceUiState(
     val pin: String = "123456",
     val clientsCount: Int = 0,
     val batteryInfo: BatteryInfo = BatteryInfo(),
-    val cameraMode: CameraMode = CameraMode.PHONE
+    val cameraMode: CameraMode = CameraMode.PHONE,
+    val isRecording: Boolean = false,
+    val recordingStartTime: Long = 0L,
+    val recordingsCount: Int = 0,
+    val isDeviceAdminActive: Boolean = false
 )
 
 class StreamingService : LifecycleService() {
@@ -49,21 +55,35 @@ class StreamingService : LifecycleService() {
     private lateinit var networkHelper: NetworkHelper
     private lateinit var mdnsHelper: MdnsHelper
     private lateinit var soundManager: SoundManager
+    lateinit var recordingManager: RecordingManager
+        private set
     private var serverManager: ServerManager? = null
     private var webRtcManager: WebRtcManager? = null
 
     override fun onCreate() {
         super.onCreate()
+        instance = this
         powerManagerHelper = PowerManagerHelper(this)
         networkHelper = NetworkHelper(this)
         mdnsHelper = MdnsHelper(this)
         soundManager = SoundManager(this)
+        recordingManager = RecordingManager(this) { webRtcManager }
 
-        webRtcManager = WebRtcManager(this) { signalingJson ->
-            serverManager?.broadcastJson(signalingJson)
+        webRtcManager = WebRtcManager(this) { clientId, signalingJson ->
+            if (clientId.isEmpty() || clientId == "*") {
+                serverManager?.broadcastJson(signalingJson)
+            } else {
+                serverManager?.sendToClient(clientId, signalingJson)
+            }
         }
 
         createNotificationChannel()
+
+        // Check Device Admin status
+        _uiState.value = _uiState.value.copy(
+            isDeviceAdminActive = powerManagerHelper.isDeviceAdminActive(),
+            recordingsCount = recordingManager.getRecordingsCount()
+        )
 
         // Observe network IP
         lifecycleScope.launch {
@@ -84,8 +104,28 @@ class StreamingService : LifecycleService() {
         lifecycleScope.launch {
             webRtcManager?.isStreaming?.collect { streaming ->
                 _uiState.value = _uiState.value.copy(
-                    statusText = if (streaming) "Live Streaming" else if (_uiState.value.clientsCount > 0) "Viewer Connected" else "Server Running"
+                    statusText = if (_uiState.value.isRecording) "Recording & Streaming" else if (streaming) "Live Streaming" else if (_uiState.value.clientsCount > 0) "Viewer Connected" else "Server Running"
                 )
+            }
+        }
+
+        // Observe recording state
+        lifecycleScope.launch {
+            recordingManager.isRecording.collect { recording ->
+                _uiState.value = _uiState.value.copy(
+                    isRecording = recording,
+                    recordingsCount = recordingManager.getRecordingsCount(),
+                    statusText = if (recording) "Recording in Progress" else if (webRtcManager?.isStreaming?.value == true) "Live Streaming" else if (_uiState.value.clientsCount > 0) "Viewer Connected" else "Server Running"
+                )
+                if (recording) {
+                    updateNotification("🔴 RECORDING ACTIVE • http://${_uiState.value.ipAddress}:8080")
+                }
+            }
+        }
+
+        lifecycleScope.launch {
+            recordingManager.recordingStartTime.collect { startTime ->
+                _uiState.value = _uiState.value.copy(recordingStartTime = startTime)
             }
         }
     }
@@ -136,8 +176,13 @@ class StreamingService : LifecycleService() {
                 powerManagerHelper = powerManagerHelper,
                 networkHelper = networkHelper,
                 soundManager = soundManager,
-                onCommandReceived = { cmdJson, reply ->
-                    handleRemoteCommand(cmdJson, reply)
+                recordingManager = recordingManager,
+                onCommandReceived = { clientId, cmdJson, reply ->
+                    handleRemoteCommand(clientId, cmdJson, reply)
+                },
+                onClientDisconnected = { clientId ->
+                    Log.i(TAG, "Client disconnected: $clientId, releasing its WebRTC stream")
+                    webRtcManager?.closeClientConnection(clientId)
                 }
             ).apply {
                 start()
@@ -169,16 +214,16 @@ class StreamingService : LifecycleService() {
         }
     }
 
-    private fun handleRemoteCommand(command: JSONObject, reply: (JSONObject) -> Unit) {
+    private fun handleRemoteCommand(clientId: String, command: JSONObject, reply: (JSONObject) -> Unit) {
         val cmd = command.optString("cmd", "")
         val type = command.optString("type", "")
-        Log.d(TAG, "Remote message received: cmd='$cmd', type='$type'")
+        Log.d(TAG, "Remote message received from [$clientId]: cmd='$cmd', type='$type'")
 
         // WebRTC Signaling messages
         if (type == "answer") {
             val sdp = command.optString("sdp", "")
             if (sdp.isNotEmpty()) {
-                webRtcManager?.handleRemoteAnswer(sdp)
+                webRtcManager?.handleRemoteAnswer(clientId, sdp)
             }
             return
         }
@@ -188,7 +233,7 @@ class StreamingService : LifecycleService() {
             val sdpMid = command.optString("sdpMid", "0")
             val sdpMLineIndex = command.optInt("sdpMLineIndex", 0)
             if (candidate.isNotEmpty()) {
-                webRtcManager?.handleRemoteIceCandidate(candidate, sdpMid, sdpMLineIndex)
+                webRtcManager?.handleRemoteIceCandidate(clientId, candidate, sdpMid, sdpMLineIndex)
             }
             return
         }
@@ -202,7 +247,7 @@ class StreamingService : LifecycleService() {
                 })
             }
             "start_stream", "request_stream" -> {
-                Log.i(TAG, "Ground station requested Start Stream. Initializing WebRTC Offer...")
+                Log.i(TAG, "Ground station [$clientId] requested Start Stream. Initializing WebRTC Offer...")
                 val modeStr = command.optString("mode", "")
                 if (modeStr.isNotEmpty()) {
                     val newMode = try {
@@ -217,10 +262,9 @@ class StreamingService : LifecycleService() {
                         CameraMode.BOTH -> StreamMode.BOTH
                     }
                     webRtcManager?.setStreamMode(streamMode)
-                } else {
-                    webRtcManager?.ensureCameraRunning()
-                    webRtcManager?.startStreamingToClient()
                 }
+                webRtcManager?.ensureCameraRunning()
+                webRtcManager?.startStreamingToClient(clientId)
                 reply(JSONObject().apply {
                     put("type", "ack")
                     put("cmd", "start_stream")
@@ -228,8 +272,8 @@ class StreamingService : LifecycleService() {
                 })
             }
             "stop_stream" -> {
-                Log.i(TAG, "Ground station requested Stop Stream.")
-                webRtcManager?.closePeerConnection()
+                Log.i(TAG, "Ground station [$clientId] requested Stop Stream.")
+                webRtcManager?.closeClientConnection(clientId)
                 reply(JSONObject().apply {
                     put("type", "ack")
                     put("cmd", "stop_stream")
@@ -306,11 +350,70 @@ class StreamingService : LifecycleService() {
                 })
             }
             "lock_screen" -> {
-                val locked = powerManagerHelper.lockScreenNow()
+                val isAdmin = powerManagerHelper.isDeviceAdminActive()
+                val locked = if (isAdmin) powerManagerHelper.lockScreenNow() else false
                 reply(JSONObject().apply {
                     put("type", "ack")
                     put("cmd", "lock_screen")
                     put("success", locked)
+                    put("deviceAdminActive", isAdmin)
+                    if (!isAdmin) {
+                        put("error", "Device Administrator is not enabled on the drone phone. Please open Optix app Pre-Flight settings to enable.")
+                    }
+                })
+            }
+            "start_recording" -> {
+                val success = recordingManager.startRecording()
+                val fileName = recordingManager.currentFileName.value
+                val startTime = recordingManager.recordingStartTime.value
+                reply(JSONObject().apply {
+                    put("type", "ack")
+                    put("cmd", "start_recording")
+                    put("success", success)
+                    put("fileName", fileName)
+                    put("startTime", startTime)
+                })
+                if (success) {
+                    serverManager?.broadcastJson(JSONObject().apply {
+                        put("type", "recording_state")
+                        put("isRecording", true)
+                        put("fileName", fileName)
+                        put("startTime", startTime)
+                    })
+                }
+            }
+            "stop_recording" -> {
+                val savedFile = recordingManager.stopRecording()
+                val success = savedFile != null
+                val fileName = savedFile?.name ?: ""
+                reply(JSONObject().apply {
+                    put("type", "ack")
+                    put("cmd", "stop_recording")
+                    put("success", success)
+                    put("fileName", fileName)
+                    put("fileSize", savedFile?.length() ?: 0L)
+                })
+                serverManager?.broadcastJson(JSONObject().apply {
+                    put("type", "recording_state")
+                    put("isRecording", false)
+                    put("fileName", fileName)
+                })
+            }
+            "get_recordings" -> {
+                reply(JSONObject().apply {
+                    put("type", "ack")
+                    put("cmd", "get_recordings")
+                    put("recordings", recordingManager.getRecordingsJson())
+                })
+            }
+            "delete_recording" -> {
+                val fileName = command.optString("fileName", "")
+                val deleted = recordingManager.deleteRecording(fileName)
+                reply(JSONObject().apply {
+                    put("type", "ack")
+                    put("cmd", "delete_recording")
+                    put("fileName", fileName)
+                    put("success", deleted)
                 })
             }
             "request_usb_permission" -> {
@@ -338,6 +441,10 @@ class StreamingService : LifecycleService() {
                     put("wifiPercent", sig.signalPercent)
                     put("isStreaming", webRtcManager?.isStreaming?.value ?: false)
                     put("mode", _uiState.value.cameraMode.name)
+                    put("isRecording", recordingManager.isRecording.value)
+                    put("recordingStartTime", recordingManager.recordingStartTime.value)
+                    put("recordingsCount", recordingManager.getRecordingsCount())
+                    put("deviceAdminActive", powerManagerHelper.isDeviceAdminActive())
                 })
             }
             "set_mode" -> {
@@ -371,7 +478,7 @@ class StreamingService : LifecycleService() {
 
     private fun stopServer() {
         try {
-            webRtcManager?.closePeerConnection()
+            webRtcManager?.closeAllPeerConnections()
             webRtcManager?.stopCameraCapture()
         } catch (e: Exception) {
             Log.e(TAG, "Error stopping WebRTC", e)
@@ -396,9 +503,13 @@ class StreamingService : LifecycleService() {
     }
 
     override fun onDestroy() {
+        try {
+            recordingManager.stopRecording()
+        } catch (_: Exception) {}
         stopServer()
         webRtcManager?.release()
         webRtcManager = null
+        instance = null
         super.onDestroy()
     }
 
@@ -454,6 +565,26 @@ class StreamingService : LifecycleService() {
 
         private val _uiState = MutableStateFlow(ServiceUiState())
         val uiState: StateFlow<ServiceUiState> = _uiState.asStateFlow()
+
+        var instance: StreamingService? = null
+            private set
+
+        fun startRecording(): Boolean {
+            return instance?.recordingManager?.startRecording() ?: false
+        }
+
+        fun stopRecording(): File? {
+            return instance?.recordingManager?.stopRecording()
+        }
+
+        fun refreshDeviceAdminStatus() {
+            instance?.let {
+                _uiState.value = _uiState.value.copy(
+                    isDeviceAdminActive = it.powerManagerHelper.isDeviceAdminActive(),
+                    recordingsCount = it.recordingManager.getRecordingsCount()
+                )
+            }
+        }
 
         fun setCameraMode(mode: CameraMode) {
             _uiState.value = _uiState.value.copy(cameraMode = mode)

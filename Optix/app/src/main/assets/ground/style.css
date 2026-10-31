@@ -796,3 +796,237 @@ video.fill-mode {
     gap: 4px;
   }
 }
+
+/* ==========================================================================
+   Recording UI & Footage Styles
+   ========================================================================== */
+
+/* Top bar recording button */
+.btn-rec {
+  border-color: rgba(255, 23, 68, 0.4) !important;
+  color: #ff5252 !important;
+}
+
+.btn-rec:hover {
+  background: rgba(255, 23, 68, 0.15) !important;
+  border-color: #ff1744 !important;
+}
+
+.btn-rec.recording {
+  background: #d50000 !important;
+  border-color: #ff1744 !important;
+  color: #ffffff !important;
+  box-shadow: 0 0 12px rgba(255, 23, 68, 0.7);
+  animation: pulse-border 1.5s infinite;
+}
+
+.btn-drawer-rec.recording {
+  background: #d50000 !important;
+  color: #ffffff !important;
+  border-color: #ff5252 !important;
+}
+
+@keyframes pulse-border {
+  0% { box-shadow: 0 0 6px rgba(255, 23, 68, 0.5); }
+  50% { box-shadow: 0 0 16px rgba(255, 23, 68, 0.9); }
+  100% { box-shadow: 0 0 6px rgba(255, 23, 68, 0.5); }
+}
+
+/* OSD Recording Badge */
+.osd-rec-badge {
+  background: rgba(213, 0, 0, 0.85) !important;
+  border: 1px solid #ff1744 !important;
+  color: #ffffff !important;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+}
+
+.rec-dot-pulse {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #ff1744;
+  margin-right: 5px;
+  box-shadow: 0 0 6px #ff1744;
+  animation: blink-rec 1s infinite;
+}
+
+@keyframes blink-rec {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.3; transform: scale(0.85); }
+}
+
+/* Recording Notice in Drawer */
+.recording-notice {
+  background: rgba(255, 23, 68, 0.15);
+  border: 1px solid rgba(255, 23, 68, 0.5);
+  border-radius: 6px;
+  padding: 8px 10px;
+  font-size: 0.75rem;
+  color: #ff8a80;
+  margin-bottom: 10px;
+  display: flex;
+  align-items: center;
+}
+
+/* Recordings List Container in Drawer */
+.recordings-list-box {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-height: 280px;
+  overflow-y: auto;
+  padding-right: 4px;
+}
+
+.recording-card {
+  background: rgba(18, 26, 38, 0.9);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 8px;
+  padding: 10px;
+  transition: all 0.2s ease;
+}
+
+.recording-card:hover {
+  border-color: rgba(0, 229, 255, 0.3);
+  background: rgba(26, 38, 57, 0.9);
+}
+
+.recording-card-title {
+  font-size: 0.78rem;
+  font-weight: 700;
+  font-family: var(--font-mono);
+  color: #e2e8f0;
+  word-break: break-all;
+  margin-bottom: 4px;
+}
+
+.recording-card-meta {
+  display: flex;
+  justify-content: space-between;
+  font-size: 0.7rem;
+  color: #8b9bb4;
+  margin-bottom: 8px;
+}
+
+.recording-btn-row {
+  display: flex;
+  gap: 6px;
+}
+
+.btn-card {
+  flex: 1;
+  padding: 5px 8px;
+  font-size: 0.72rem;
+  font-weight: 600;
+  border-radius: 4px;
+  border: 1px solid transparent;
+  cursor: pointer;
+  text-align: center;
+  text-decoration: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  transition: all 0.15s ease;
+}
+
+.btn-card-download {
+  background: rgba(0, 230, 118, 0.2);
+  color: #00e676;
+  border-color: rgba(0, 230, 118, 0.4);
+}
+
+.btn-card-download:hover {
+  background: rgba(0, 230, 118, 0.35);
+}
+
+.btn-card-play {
+  background: rgba(0, 229, 255, 0.2);
+  color: #00e5ff;
+  border-color: rgba(0, 229, 255, 0.4);
+}
+
+.btn-card-play:hover {
+  background: rgba(0, 229, 255, 0.35);
+}
+
+.btn-card-delete {
+  flex: 0 0 28px;
+  background: rgba(255, 23, 68, 0.15);
+  color: #ff5252;
+  border-color: rgba(255, 23, 68, 0.3);
+}
+
+.btn-card-delete:hover {
+  background: rgba(255, 23, 68, 0.35);
+}
+
+/* Video Preview Modal Dialog */
+.modal-backdrop {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  background: rgba(0, 0, 0, 0.85);
+  backdrop-filter: blur(8px);
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+}
+
+.modal-content {
+  background: #111a26;
+  border: 1px solid rgba(0, 229, 255, 0.3);
+  border-radius: 12px;
+  width: 100%;
+  max-width: 680px;
+  overflow: hidden;
+  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.8);
+}
+
+.modal-header {
+  padding: 12px 16px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.modal-title {
+  font-size: 0.9rem;
+  font-weight: 700;
+  font-family: var(--font-mono);
+  color: #e2e8f0;
+}
+
+.btn-close-modal {
+  background: transparent;
+  border: none;
+  color: #8b9bb4;
+  font-size: 1.1rem;
+  cursor: pointer;
+  padding: 4px;
+}
+
+.btn-close-modal:hover {
+  color: #ffffff;
+}
+
+.modal-body {
+  padding: 14px;
+  background: #000000;
+}
+
+.modal-footer {
+  padding: 12px 16px;
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+}
+

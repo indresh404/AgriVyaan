@@ -5,6 +5,7 @@ import android.util.Log
 import com.agrivyaan.optix.audio.SoundManager
 import com.agrivyaan.optix.network.NetworkHelper
 import com.agrivyaan.optix.power.PowerManagerHelper
+import com.agrivyaan.optix.recording.RecordingManager
 import fi.iki.elonen.NanoHTTPD
 import fi.iki.elonen.NanoWSD
 import kotlinx.coroutines.CoroutineScope
@@ -14,6 +15,8 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import org.json.JSONObject
+import java.io.File
+import java.io.FileInputStream
 import java.io.InputStream
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
@@ -24,7 +27,9 @@ class ServerManager(
     private val powerManagerHelper: PowerManagerHelper,
     private val networkHelper: NetworkHelper,
     private val soundManager: SoundManager,
-    private val onCommandReceived: (command: JSONObject, reply: (JSONObject) -> Unit) -> Unit
+    private val recordingManager: RecordingManager,
+    private val onCommandReceived: (clientId: String, command: JSONObject, reply: (JSONObject) -> Unit) -> Unit,
+    private val onClientDisconnected: ((clientId: String) -> Unit)? = null
 ) : NanoWSD(port) {
 
     private val _connectedClientsCount = MutableStateFlow(0)
@@ -68,6 +73,27 @@ class ServerManager(
             return withCors(newFixedLengthResponse(Response.Status.OK, "application/json", jsonArray.toString()))
         }
 
+        // Recorded footages list API
+        if (uri == "/api/recordings" && method == Method.GET) {
+            val jsonArray = recordingManager.getRecordingsJson()
+            return withCors(newFixedLengthResponse(Response.Status.OK, "application/json", jsonArray.toString()))
+        }
+
+        // Delete recording API
+        if ((uri.startsWith("/api/recordings/") || uri == "/api/recordings/delete") && (method == Method.POST || method == Method.DELETE)) {
+            val fileName = if (uri.startsWith("/api/recordings/")) {
+                uri.removePrefix("/api/recordings/")
+            } else {
+                session.parameters["fileName"]?.firstOrNull() ?: ""
+            }
+            val deleted = recordingManager.deleteRecording(fileName)
+            val resp = JSONObject().apply {
+                put("success", deleted)
+                put("fileName", fileName)
+            }
+            return withCors(newFixedLengthResponse(Response.Status.OK, "application/json", resp.toString()))
+        }
+
         // Audio file stream
         if (uri.startsWith("/sounds/")) {
             val fileName = uri.removePrefix("/sounds/")
@@ -76,6 +102,24 @@ class ServerManager(
                 withCors(newChunkedResponse(Response.Status.OK, "audio/mpeg", stream))
             } else {
                 withCors(newFixedLengthResponse(Response.Status.NOT_FOUND, MIME_PLAINTEXT, "Sound not found"))
+            }
+        }
+
+        // Recorded MP4 video footage download & stream
+        if (uri.startsWith("/recordings/")) {
+            val fileName = uri.removePrefix("/recordings/")
+            val file = recordingManager.getRecordingFile(fileName)
+            return if (file != null && file.exists()) {
+                val stream = FileInputStream(file)
+                val isDownload = session.parameters["download"]?.firstOrNull() == "1"
+                val disposition = if (isDownload) "attachment; filename=\"$fileName\"" else "inline; filename=\"$fileName\""
+                val response = newFixedLengthResponse(Response.Status.OK, "video/mp4", stream, file.length()).apply {
+                    addHeader("Content-Disposition", disposition)
+                    addHeader("Accept-Ranges", "bytes")
+                }
+                withCors(response)
+            } else {
+                withCors(newFixedLengthResponse(Response.Status.NOT_FOUND, MIME_PLAINTEXT, "Recording not found"))
             }
         }
 
@@ -95,6 +139,10 @@ class ServerManager(
                 put("wifiPercent", signal.signalPercent)
                 put("ipAddress", signal.ip)
                 put("connectedClients", _connectedClientsCount.value)
+                put("isRecording", recordingManager.isRecording.value)
+                put("recordingStartTime", recordingManager.recordingStartTime.value)
+                put("recordingsCount", recordingManager.getRecordingsCount())
+                put("deviceAdminActive", powerManagerHelper.isDeviceAdminActive())
             }
             return withCors(newFixedLengthResponse(Response.Status.OK, "application/json", json.toString()))
         }
@@ -133,6 +181,17 @@ class ServerManager(
         }
     }
 
+    fun sendToClient(clientId: String, json: JSONObject) {
+        val ws = activeWebSockets[clientId]
+        if (ws != null && ws.isOpen) {
+            try {
+                ws.send(json.toString())
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to send message to client $clientId", e)
+            }
+        }
+    }
+
     inner class OptixWebSocket(handshake: IHTTPSession, val id: String) : WebSocket(handshake) {
 
         override fun onOpen() {
@@ -145,6 +204,7 @@ class ServerManager(
             activeWebSockets.remove(id)
             _connectedClientsCount.value = activeWebSockets.size
             Log.d(TAG, "Client disconnected: $id (Total: ${activeWebSockets.size})")
+            onClientDisconnected?.invoke(id)
         }
 
         override fun onMessage(message: WebSocketFrame) {
@@ -154,7 +214,7 @@ class ServerManager(
 
                 // Dispatch asynchronously so the WebSocket frame reader thread is never blocked
                 serverScope.launch {
-                    onCommandReceived(json) { responseJson ->
+                    onCommandReceived(id, json) { responseJson ->
                         try {
                             if (isOpen) {
                                 send(responseJson.toString())

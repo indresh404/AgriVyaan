@@ -42,7 +42,9 @@ fun MainScreen(
     onStartService: () -> Unit,
     onStopService: () -> Unit,
     onOpenPreFlight: () -> Unit,
-    onDetectUsb: () -> Unit = {}
+    onDetectUsb: () -> Unit = {},
+    onRequestDeviceAdmin: () -> Unit = {},
+    onToggleRecording: () -> Unit = {}
 ) {
     val context = LocalContext.current
     val scrollState = rememberScrollState()
@@ -251,6 +253,116 @@ fun MainScreen(
                             "${state.clientsCount}",
                             fontWeight = FontWeight.Bold,
                             fontSize = 14.sp
+                        )
+                    }
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        Text("FOOTAGE", fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                        Text(
+                            "${state.recordingsCount}",
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 14.sp
+                        )
+                    }
+                }
+            }
+
+            // Screen Lock / Device Admin Notice
+            if (!state.isDeviceAdminActive) {
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = CardDefaults.cardColors(
+                        containerColor = Color(0xFF4A3400)
+                    ),
+                    shape = RoundedCornerShape(12.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.padding(14.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text("🔒", fontSize = 24.sp)
+                        Spacer(modifier = Modifier.width(10.dp))
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                "SCREEN LOCK PERMISSION NEEDED",
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 13.sp,
+                                color = Color.White
+                            )
+                            Text(
+                                "Device Admin permission is required so ground station can remotely lock and turn off screen to save battery.",
+                                fontSize = 11.sp,
+                                color = Color.White.copy(alpha = 0.85f)
+                            )
+                            Spacer(modifier = Modifier.height(6.dp))
+                            Button(
+                                onClick = onRequestDeviceAdmin,
+                                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFFFB300))
+                            ) {
+                                Text("ENABLE REMOTE SCREEN LOCK", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = Color.Black)
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Local Hardware Recording Card
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                colors = CardDefaults.cardColors(
+                    containerColor = if (state.isRecording) Color(0xFF3E1B1B) else MaterialTheme.colorScheme.surfaceVariant
+                ),
+                shape = RoundedCornerShape(12.dp)
+            ) {
+                Column(modifier = Modifier.padding(14.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text(
+                                if (state.isRecording) "🔴" else "⏺",
+                                fontSize = 14.sp
+                            )
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(
+                                "LOCAL HARDWARE RECORDING",
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 12.sp,
+                                color = if (state.isRecording) Color(0xFFFF5252) else MaterialTheme.colorScheme.primary
+                            )
+                        }
+                        Surface(
+                            shape = RoundedCornerShape(4.dp),
+                            color = if (state.isRecording) Color(0xFFD32F2F) else MaterialTheme.colorScheme.primaryContainer
+                        ) {
+                            Text(
+                                if (state.isRecording) "RECORDING" else "${state.recordingsCount} VIDEOS",
+                                fontSize = 10.sp,
+                                fontWeight = FontWeight.Bold,
+                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+                                color = if (state.isRecording) Color.White else MaterialTheme.colorScheme.onPrimaryContainer
+                            )
+                        }
+                    }
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        text = if (state.isRecording) "Continuous zero-lag hardware recording directly to phone storage. Continues uninterrupted even if Wi-Fi drops." else "Capture crystal clear H.264 video footage directly to phone storage.",
+                        fontSize = 11.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.8f)
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Button(
+                        onClick = onToggleRecording,
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = if (state.isRecording) Color(0xFFD32F2F) else MaterialTheme.colorScheme.primary
+                        )
+                    ) {
+                        Text(
+                            text = if (state.isRecording) "STOP RECORDING" else "START RECORDING FOOTAGE",
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Bold
                         )
                     }
                 }

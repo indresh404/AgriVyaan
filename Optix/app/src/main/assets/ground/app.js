@@ -25,6 +25,11 @@ let statsInterval = null;
 let lastBytesReceived = 0;
 let lastStatsTime = 0;
 
+// Recording State
+let isRecording = false;
+let recordingStartTime = null;
+let recordingTimerInterval = null;
+
 // DOM Elements
 const connStatusDot = document.getElementById('connStatusDot');
 const connStatusText = document.getElementById('connStatusText');
@@ -57,6 +62,20 @@ const btnQuickStart = document.getElementById('btnQuickStart');
 
 const btnStreamToggle = document.getElementById('btnStreamToggle');
 const btnStreamText = document.getElementById('btnStreamText');
+const btnRecordToggle = document.getElementById('btnRecordToggle');
+const btnRecordText = document.getElementById('btnRecordText');
+const recIcon = document.getElementById('recIcon');
+const osdRecBadge = document.getElementById('osdRecBadge');
+const osdRecTimer = document.getElementById('osdRecTimer');
+const btnDrawerRecord = document.getElementById('btnDrawerRecord');
+const recordingNotice = document.getElementById('recordingNotice');
+const recordingsList = document.getElementById('recordingsList');
+
+const videoModal = document.getElementById('videoModal');
+const modalVideoPlayer = document.getElementById('modalVideoPlayer');
+const modalVideoTitle = document.getElementById('modalVideoTitle');
+const btnModalDownload = document.getElementById('btnModalDownload');
+
 const btnTorch = document.getElementById('btnTorch');
 const btnStrobe = document.getElementById('btnStrobe');
 const btnToggleReticle = document.getElementById('btnToggleReticle');
@@ -73,6 +92,7 @@ document.addEventListener('DOMContentLoaded', () => {
   appendLog('OPTIX FPV Cockpit booting...', 'info');
   setupVideoInteractions();
   fetchSoundList();
+  fetchRecordingsList();
   connectWebSocket();
 });
 
@@ -253,6 +273,20 @@ async function handleServerMessage(msg) {
     if (msg.screenOn !== undefined && screenState) {
       screenState.textContent = msg.screenOn ? 'SCR ON' : 'SCR OFF';
     }
+    if (msg.isRecording !== undefined) {
+      updateRecordingUI(msg.isRecording, msg.recordingStartTime);
+    }
+    return;
+  }
+
+  if (msg.type === 'recording_state') {
+    updateRecordingUI(msg.isRecording, msg.startTime);
+    if (msg.isRecording) {
+      appendLog(`🔴 Local hardware recording active on phone: ${msg.fileName || ''}`, 'success');
+    } else {
+      appendLog(`⏹ Recording finished and saved to phone: ${msg.fileName || ''}`, 'info');
+      fetchRecordingsList();
+    }
     return;
   }
 
@@ -266,6 +300,34 @@ async function handleServerMessage(msg) {
     } else if (msg.cmd === 'stop_stream') {
       appendLog('Drone confirmed: Live stream stopped', 'info');
       updateStreamButtonState(false);
+    } else if (msg.cmd === 'lock_screen') {
+      if (msg.success) {
+        appendLog('📱 Screen locked successfully on drone phone.', 'success');
+        if (screenState) screenState.textContent = 'SCR OFF';
+      } else {
+        const err = msg.error || 'Device Admin permission is not active on phone.';
+        appendLog(`⚠️ Screen Lock Failed: ${err}`, 'error');
+        alert(`⚠️ Screen Lock Notice:\n\n${err}\n\nPlease open the Optix app on the drone phone, navigate to "Pre-Flight Check & Settings", and enable "Remote Screen Lock (Device Admin)".`);
+      }
+    } else if (msg.cmd === 'wake_screen') {
+      appendLog('☀️ Drone phone screen woke up.', 'info');
+      if (screenState) screenState.textContent = 'SCR ON';
+    } else if (msg.cmd === 'start_recording') {
+      if (msg.success) {
+        updateRecordingUI(true, msg.startTime);
+        appendLog(`🔴 Drone confirmed: Local recording started (${msg.fileName || ''})`, 'success');
+      } else {
+        appendLog('Failed to start recording on drone phone', 'error');
+      }
+    } else if (msg.cmd === 'stop_recording') {
+      updateRecordingUI(false);
+      appendLog(`⏹ Drone confirmed: Recording saved to phone storage (${msg.fileName || ''})`, 'success');
+      fetchRecordingsList();
+    } else if (msg.cmd === 'delete_recording') {
+      if (msg.success) {
+        appendLog(`🗑 Deleted recording: ${msg.fileName}`, 'info');
+        fetchRecordingsList();
+      }
     } else if (msg.cmd === 'toggle_torch' || msg.cmd === 'torch') {
       isTorchOn = msg.torchOn;
       if (btnTorch) btnTorch.classList.toggle('active', isTorchOn);
@@ -868,3 +930,172 @@ function appendLog(text, level = 'info') {
 function clearLogs() {
   if (logOutput) logOutput.innerHTML = '';
 }
+
+// ==========================================================================
+// Local Video Recording & Footage Management
+// ==========================================================================
+
+function toggleRecording() {
+  if (!isRecording) {
+    sendCommand('start_recording');
+    appendLog('Sending command: START local phone video recording...', 'info');
+  } else {
+    sendCommand('stop_recording');
+    appendLog('Sending command: STOP recording & finalize MP4 footage...', 'info');
+  }
+}
+
+function updateRecordingUI(recording, startTime) {
+  isRecording = !!recording;
+
+  if (isRecording) {
+    if (startTime && !recordingStartTime) {
+      recordingStartTime = startTime;
+    } else if (!recordingStartTime) {
+      recordingStartTime = Date.now();
+    }
+
+    if (btnRecordToggle) {
+      btnRecordToggle.classList.add('recording');
+      if (btnRecordText) btnRecordText.textContent = 'STOP REC';
+      if (recIcon) recIcon.textContent = '⏹';
+    }
+    if (btnDrawerRecord) {
+      btnDrawerRecord.classList.add('recording');
+      btnDrawerRecord.innerHTML = '⏹ Stop Phone Recording';
+    }
+    if (recordingNotice) recordingNotice.style.display = 'flex';
+    if (osdRecBadge) osdRecBadge.style.display = 'inline-flex';
+
+    startRecordingTimer();
+  } else {
+    recordingStartTime = null;
+    stopRecordingTimer();
+
+    if (btnRecordToggle) {
+      btnRecordToggle.classList.remove('recording');
+      if (btnRecordText) btnRecordText.textContent = 'REC';
+      if (recIcon) recIcon.textContent = '⏺';
+    }
+    if (btnDrawerRecord) {
+      btnDrawerRecord.classList.remove('recording');
+      btnDrawerRecord.innerHTML = '⏺ Start Phone Recording';
+    }
+    if (recordingNotice) recordingNotice.style.display = 'none';
+    if (osdRecBadge) osdRecBadge.style.display = 'none';
+  }
+}
+
+function startRecordingTimer() {
+  if (recordingTimerInterval) clearInterval(recordingTimerInterval);
+  updateRecordingTimerDisplay();
+  recordingTimerInterval = setInterval(updateRecordingTimerDisplay, 1000);
+}
+
+function stopRecordingTimer() {
+  if (recordingTimerInterval) clearInterval(recordingTimerInterval);
+  recordingTimerInterval = null;
+}
+
+function updateRecordingTimerDisplay() {
+  if (!recordingStartTime || !osdRecTimer) return;
+  const elapsed = Math.floor((Date.now() - recordingStartTime) / 1000);
+  const hrs = String(Math.floor(elapsed / 3600)).padStart(2, '0');
+  const mins = String(Math.floor((elapsed % 3600) / 60)).padStart(2, '0');
+  const secs = String(elapsed % 60).padStart(2, '0');
+  osdRecTimer.textContent = `REC ${hrs}:${mins}:${secs}`;
+}
+
+async function fetchRecordingsList() {
+  if (!recordingsList) return;
+  try {
+    const res = await fetch('/api/recordings');
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const list = await res.json();
+    renderRecordingsList(list);
+  } catch (e) {
+    console.warn('Failed to fetch recordings list:', e);
+  }
+}
+
+function renderRecordingsList(list) {
+  if (!recordingsList) return;
+  recordingsList.innerHTML = '';
+
+  if (!list || list.length === 0) {
+    recordingsList.innerHTML = '<span style="font-size:0.75rem; color:#8b9bb4; padding:8px; display:block; text-align:center;">No recordings saved yet</span>';
+    return;
+  }
+
+  list.forEach(rec => {
+    const card = document.createElement('div');
+    card.className = 'recording-card';
+    card.innerHTML = `
+      <div class="recording-card-title">📹 ${escapeHtml(rec.fileName)}</div>
+      <div class="recording-card-meta">
+        <span>📅 ${escapeHtml(rec.dateFormatted)}</span>
+        <span>💾 ${escapeHtml(rec.sizeFormatted)}</span>
+      </div>
+      <div class="recording-btn-row">
+        <a class="btn-card btn-card-download" href="/recordings/${encodeURIComponent(rec.fileName)}?download=1" download="${escapeHtml(rec.fileName)}" title="Download to PC/Laptop">
+          ⬇ Download
+        </a>
+        <button class="btn-card btn-card-play" onclick="openVideoModal('${escapeJs(rec.fileName)}', '/recordings/${encodeURIComponent(rec.fileName)}')" title="Preview Footage">
+          ▶ Play
+        </button>
+        <button class="btn-card btn-card-delete" onclick="deleteRecording('${escapeJs(rec.fileName)}')" title="Delete Footage">
+          🗑
+        </button>
+      </div>
+    `;
+    recordingsList.appendChild(card);
+  });
+}
+
+function openVideoModal(fileName, videoUrl) {
+  if (!videoModal || !modalVideoPlayer) return;
+  modalVideoTitle.textContent = fileName;
+  modalVideoPlayer.src = videoUrl;
+  if (btnModalDownload) {
+    btnModalDownload.href = `${videoUrl}?download=1`;
+    btnModalDownload.download = fileName;
+  }
+  videoModal.style.display = 'flex';
+  modalVideoPlayer.play().catch(_ => {});
+}
+
+function closeVideoModal(e) {
+  if (e && e.target !== videoModal && e.type !== 'click') return;
+  if (modalVideoPlayer) {
+    modalVideoPlayer.pause();
+    modalVideoPlayer.src = '';
+  }
+  if (videoModal) videoModal.style.display = 'none';
+}
+
+async function deleteRecording(fileName) {
+  if (!confirm(`Are you sure you want to delete "${fileName}" from phone storage?`)) return;
+  try {
+    const res = await fetch(`/api/recordings/${encodeURIComponent(fileName)}`, { method: 'DELETE' });
+    const data = await res.json();
+    if (data.success) {
+      appendLog(`Deleted footage: ${fileName}`, 'info');
+      fetchRecordingsList();
+    } else {
+      appendLog(`Could not delete footage: ${fileName}`, 'error');
+    }
+  } catch (err) {
+    sendCommand('delete_recording', { fileName: fileName });
+  }
+}
+
+function escapeHtml(str) {
+  if (!str) return '';
+  return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
+function escapeJs(str) {
+  if (!str) return '';
+  return str.replace(/'/g, "\\'").replace(/"/g, '\\"');
+}
+
