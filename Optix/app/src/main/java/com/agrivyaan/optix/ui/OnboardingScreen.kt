@@ -58,6 +58,18 @@ fun OnboardingScreen(
         refreshTrigger++
     }
 
+    val fineLocationLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestMultiplePermissions()
+    ) {
+        refreshTrigger++
+    }
+
+    val backgroundLocationLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission()
+    ) {
+        refreshTrigger++
+    }
+
     // Battery Optimization check
     val powerManager = remember { context.getSystemService(Context.POWER_SERVICE) as PowerManager }
     val isBatteryIgnored = remember(refreshTrigger) {
@@ -76,6 +88,19 @@ fun OnboardingScreen(
         ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED
     }
 
+    // Location permissions check
+    val hasFineLocation = remember(refreshTrigger) {
+        ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED
+    }
+
+    val hasBackgroundLocation = remember(refreshTrigger) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_BACKGROUND_LOCATION) == PackageManager.PERMISSION_GRANTED
+        } else {
+            true
+        }
+    }
+
     // Overlay permission check (System alert window)
     val hasOverlayPerm = remember(refreshTrigger) {
         Settings.canDrawOverlays(context)
@@ -87,6 +112,7 @@ fun OnboardingScreen(
     var adaptiveBatteryDone by remember { mutableStateOf(prefs.getBoolean("adaptive_battery", false)) }
     var autoResetDone by remember { mutableStateOf(prefs.getBoolean("auto_reset", false)) }
     var wifiSleepDone by remember { mutableStateOf(prefs.getBoolean("wifi_sleep", false)) }
+    var locationAccuracyDone by remember { mutableStateOf(prefs.getBoolean("location_accuracy", false)) }
 
     val items = listOf(
         CheckItem(
@@ -135,8 +161,59 @@ fun OnboardingScreen(
             }
         ),
         CheckItem(
+            id = "location_fine",
+            title = "4. Precise GPS Location",
+            description = "Required for real-time drone telemetry and offline live mapping on ground control.",
+            isAutoDetected = true,
+            isPassed = hasFineLocation,
+            actionLabel = if (hasFineLocation) "Granted" else "Grant",
+            onAction = {
+                fineLocationLauncher.launch(
+                    arrayOf(
+                        Manifest.permission.ACCESS_FINE_LOCATION,
+                        Manifest.permission.ACCESS_COARSE_LOCATION
+                    )
+                )
+            }
+        ),
+        CheckItem(
+            id = "location_background",
+            title = "5. Background Location Access (Always Allow)",
+            description = "Required for continuous black-box track recording while the phone screen is turned off during flight.",
+            isAutoDetected = true,
+            isPassed = hasBackgroundLocation,
+            actionLabel = if (hasBackgroundLocation) "Allowed" else "Configure",
+            onAction = {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                    if (hasFineLocation) {
+                        backgroundLocationLauncher.launch(Manifest.permission.ACCESS_BACKGROUND_LOCATION)
+                    } else {
+                        fineLocationLauncher.launch(
+                            arrayOf(
+                                Manifest.permission.ACCESS_FINE_LOCATION,
+                                Manifest.permission.ACCESS_COARSE_LOCATION
+                            )
+                        )
+                    }
+                }
+            }
+        ),
+        CheckItem(
+            id = "location_accuracy",
+            title = "6. High Accuracy / Precise Location & No Power Saving",
+            description = "Open Location Settings: Turn ON 'Precise location' and 'Google Location Accuracy / High accuracy'. Turn OFF any location power saving.",
+            isAutoDetected = false,
+            isPassed = locationAccuracyDone,
+            actionLabel = if (locationAccuracyDone) "Done" else "Open Location",
+            onAction = {
+                context.startActivity(Intent(Settings.ACTION_LOCATION_SOURCE_SETTINGS))
+                locationAccuracyDone = !locationAccuracyDone
+                prefs.edit().putBoolean("location_accuracy", locationAccuracyDone).apply()
+            }
+        ),
+        CheckItem(
             id = "device_admin",
-            title = "4. Remote Screen Lock (Device Admin)",
+            title = "7. Remote Screen Lock (Device Admin)",
             description = "Required to remotely lock and turn off the screen from the ground station to prevent overheating and save battery.",
             isAutoDetected = true,
             isPassed = isDeviceAdminActive,
@@ -148,7 +225,7 @@ fun OnboardingScreen(
         ),
         CheckItem(
             id = "sleeping_apps",
-            title = "5. Samsung: Background Usage Limits",
+            title = "8. Samsung: Background Usage Limits",
             description = "Turn OFF 'Put unused apps to sleep'. Ensure Optix is NOT in Sleeping or Deep Sleeping apps.",
             isAutoDetected = false,
             isPassed = sleepingAppsDone,
@@ -161,7 +238,7 @@ fun OnboardingScreen(
         ),
         CheckItem(
             id = "adaptive_battery",
-            title = "6. Adaptive Battery & Power Saving OFF",
+            title = "9. Adaptive Battery & Power Saving OFF",
             description = "Turn OFF 'Adaptive battery' and 'Power saving mode' during drone flight.",
             isAutoDetected = false,
             isPassed = adaptiveBatteryDone,
@@ -174,7 +251,7 @@ fun OnboardingScreen(
         ),
         CheckItem(
             id = "auto_reset",
-            title = "7. Disable Permission Auto-Reset",
+            title = "10. Disable Permission Auto-Reset",
             description = "Turn OFF 'Remove permissions if app isn't used' in App Info > Permissions.",
             isAutoDetected = false,
             isPassed = autoResetDone,
@@ -190,7 +267,7 @@ fun OnboardingScreen(
         ),
         CheckItem(
             id = "wifi_sleep",
-            title = "8. Wi-Fi Power Saving & Mobile Switch OFF",
+            title = "11. Wi-Fi Power Saving & Mobile Switch OFF",
             description = "Settings > Connections > Wi-Fi > Advanced: Turn OFF 'Switch to mobile data' & Wi-Fi power saving.",
             isAutoDetected = false,
             isPassed = wifiSleepDone,

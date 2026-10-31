@@ -19,16 +19,29 @@ import com.agrivyaan.optix.network.MdnsHelper
 import com.agrivyaan.optix.network.NetworkHelper
 import com.agrivyaan.optix.power.BatteryInfo
 import com.agrivyaan.optix.power.PowerManagerHelper
+import com.agrivyaan.optix.gps.GpsManager
+import com.agrivyaan.optix.gps.GpsTelemetry
+import com.agrivyaan.optix.gps.TrackDatabase
+import com.agrivyaan.optix.map.FlightMissionManager
+import com.agrivyaan.optix.map.MbTilesManager
+import com.agrivyaan.optix.recording.PhotoManager
 import com.agrivyaan.optix.recording.RecordingManager
 import com.agrivyaan.optix.server.ServerManager
+import com.agrivyaan.optix.webrtc.QualityPreset
 import com.agrivyaan.optix.webrtc.StreamMode
 import com.agrivyaan.optix.webrtc.WebRtcManager
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
+import java.text.SimpleDateFormat
+import java.util.*
 
 enum class CameraMode {
     PHONE, USB, BOTH
@@ -46,7 +59,9 @@ data class ServiceUiState(
     val isRecording: Boolean = false,
     val recordingStartTime: Long = 0L,
     val recordingsCount: Int = 0,
-    val isDeviceAdminActive: Boolean = false
+    val isDeviceAdminActive: Boolean = false,
+    val telemetry: GpsTelemetry = GpsTelemetry(),
+    val qualityPreset: String = "AUTO"
 )
 
 class StreamingService : LifecycleService() {
@@ -57,8 +72,23 @@ class StreamingService : LifecycleService() {
     private lateinit var soundManager: SoundManager
     lateinit var recordingManager: RecordingManager
         private set
+    lateinit var photoManager: PhotoManager
+        private set
+    lateinit var trackDatabase: TrackDatabase
+        private set
+    lateinit var mbTilesManager: MbTilesManager
+        private set
+    lateinit var flightMissionManager: FlightMissionManager
+        private set
+    lateinit var gpsManager: GpsManager
+        private set
+
     private var serverManager: ServerManager? = null
     private var webRtcManager: WebRtcManager? = null
+
+    private var isAdaptiveQualityEnabled = true
+    private var currentQualityPresetName = "AUTO"
+    private var adaptiveQualityJob: Job? = null
 
     override fun onCreate() {
         super.onCreate()
@@ -68,6 +98,35 @@ class StreamingService : LifecycleService() {
         mdnsHelper = MdnsHelper(this)
         soundManager = SoundManager(this)
         recordingManager = RecordingManager(this) { webRtcManager }
+        photoManager = PhotoManager(this)
+        trackDatabase = TrackDatabase(this)
+        mbTilesManager = MbTilesManager(this)
+        flightMissionManager = FlightMissionManager(this)
+
+        gpsManager = GpsManager(this) { telemetry ->
+            trackDatabase.recordPoint(telemetry)
+            val breachAlert = flightMissionManager.checkGeofence(
+                telemetry.rawLat,
+                telemetry.rawLon,
+                telemetry.homeLat,
+                telemetry.homeLon
+            )
+            val finalTelemetry = if (breachAlert != null) {
+                telemetry.copy(alertMessage = breachAlert)
+            } else {
+                telemetry
+            }
+
+            val json = finalTelemetry.toJson()
+            val sentOverDc = webRtcManager?.broadcastDataChannel(json.toString()) ?: false
+            if (!sentOverDc) {
+                serverManager?.broadcastJson(json)
+            }
+
+            _uiState.value = _uiState.value.copy(telemetry = finalTelemetry)
+        }
+
+        recordingManager.getTelemetry = { gpsManager.currentTelemetry.value }
 
         webRtcManager = WebRtcManager(this) { clientId, signalingJson ->
             if (clientId.isEmpty() || clientId == "*") {
@@ -170,6 +229,10 @@ class StreamingService : LifecycleService() {
         if (serverManager != null) return
 
         try {
+            gpsManager.start()
+            trackDatabase.startSession()
+            startAdaptiveQualityLoop()
+
             serverManager = ServerManager(
                 context = this,
                 port = 8080,
@@ -177,6 +240,11 @@ class StreamingService : LifecycleService() {
                 networkHelper = networkHelper,
                 soundManager = soundManager,
                 recordingManager = recordingManager,
+                trackDatabase = trackDatabase,
+                mbTilesManager = mbTilesManager,
+                flightMissionManager = flightMissionManager,
+                photoManager = photoManager,
+                getGpsTelemetry = { gpsManager.currentTelemetry.value },
                 onCommandReceived = { clientId, cmdJson, reply ->
                     handleRemoteCommand(clientId, cmdJson, reply)
                 },
@@ -247,21 +315,25 @@ class StreamingService : LifecycleService() {
                 })
             }
             "start_stream", "request_stream" -> {
-                Log.i(TAG, "Ground station [$clientId] requested Start Stream. Initializing WebRTC Offer...")
+                Log.i(TAG, "Ground station [$clientId] requested Start Stream. (Current active mode: ${_uiState.value.cameraMode})")
                 val modeStr = command.optString("mode", "")
-                if (modeStr.isNotEmpty()) {
-                    val newMode = try {
+                val activeViewers = webRtcManager?.clientPeerConnectionsCount ?: 0
+                // Only adapt mode if there are no existing active viewers; otherwise preserve running stream mode
+                if (modeStr.isNotEmpty() && activeViewers == 0) {
+                    val requestedMode = try {
                         CameraMode.valueOf(modeStr.uppercase())
                     } catch (_: Exception) {
                         CameraMode.PHONE
                     }
-                    _uiState.value = _uiState.value.copy(cameraMode = newMode)
-                    val streamMode = when (newMode) {
-                        CameraMode.PHONE -> StreamMode.PHONE
-                        CameraMode.USB -> StreamMode.USB
-                        CameraMode.BOTH -> StreamMode.BOTH
+                    if (requestedMode != _uiState.value.cameraMode) {
+                        _uiState.value = _uiState.value.copy(cameraMode = requestedMode)
+                        val streamMode = when (requestedMode) {
+                            CameraMode.PHONE -> StreamMode.PHONE
+                            CameraMode.USB -> StreamMode.USB
+                            CameraMode.BOTH -> StreamMode.BOTH
+                        }
+                        webRtcManager?.setStreamMode(streamMode)
                     }
-                    webRtcManager?.setStreamMode(streamMode)
                 }
                 webRtcManager?.ensureCameraRunning()
                 webRtcManager?.startStreamingToClient(clientId)
@@ -269,6 +341,7 @@ class StreamingService : LifecycleService() {
                     put("type", "ack")
                     put("cmd", "start_stream")
                     put("status", "started")
+                    put("mode", _uiState.value.cameraMode.name)
                 })
             }
             "stop_stream" -> {
@@ -445,7 +518,120 @@ class StreamingService : LifecycleService() {
                     put("recordingStartTime", recordingManager.recordingStartTime.value)
                     put("recordingsCount", recordingManager.getRecordingsCount())
                     put("deviceAdminActive", powerManagerHelper.isDeviceAdminActive())
+                    put("telemetry", gpsManager.currentTelemetry.value.toJson())
+                    put("qualityPreset", currentQualityPresetName)
                 })
+            }
+            "sync_track" -> {
+                val since = command.optLong("since", 0L)
+                val missed = trackDatabase.getMissedPoints(since)
+                val ptsArray = JSONArray()
+                for (p in missed) ptsArray.put(p.toJson())
+                reply(JSONObject().apply {
+                    put("type", "track_sync")
+                    put("points", ptsArray)
+                })
+            }
+            "set_home" -> {
+                val lat = command.optDouble("lat", 0.0)
+                val lon = command.optDouble("lon", 0.0)
+                if (lat != 0.0 && lon != 0.0) {
+                    gpsManager.setHomePoint(lat, lon)
+                } else {
+                    gpsManager.resetHomePoint()
+                }
+                reply(JSONObject().apply {
+                    put("type", "ack")
+                    put("cmd", "set_home")
+                    put("success", true)
+                })
+            }
+            "calibrate_baro" -> {
+                gpsManager.calibrateTakeoffAltitude()
+                reply(JSONObject().apply {
+                    put("type", "ack")
+                    put("cmd", "calibrate_baro")
+                    put("success", true)
+                })
+            }
+            "set_gps_rate" -> {
+                val rateMs = command.optLong("intervalMs", 1000L)
+                gpsManager.setUpdateInterval(rateMs)
+                reply(JSONObject().apply {
+                    put("type", "ack")
+                    put("cmd", "set_gps_rate")
+                    put("intervalMs", rateMs)
+                })
+            }
+            "set_camera_quality" -> {
+                val presetStr = command.optString("preset", "AUTO").uppercase()
+                currentQualityPresetName = presetStr
+                if (presetStr == "AUTO") {
+                    isAdaptiveQualityEnabled = true
+                    startAdaptiveQualityLoop()
+                } else {
+                    isAdaptiveQualityEnabled = false
+                    val preset = when (presetStr) {
+                        "FAST" -> QualityPreset.FAST_LOW_LATENCY
+                        "HIGH" -> QualityPreset.HIGH_FIDELITY
+                        else -> QualityPreset.BALANCED
+                    }
+                    webRtcManager?.applyQualityPreset(preset)
+                }
+                _uiState.value = _uiState.value.copy(qualityPreset = currentQualityPresetName)
+                reply(JSONObject().apply {
+                    put("type", "ack")
+                    put("cmd", "set_camera_quality")
+                    put("preset", currentQualityPresetName)
+                })
+            }
+            "take_snapshot" -> {
+                val tel = gpsManager.currentTelemetry.value
+                val width = 1280
+                val height = 720
+                val bitmap = android.graphics.Bitmap.createBitmap(width, height, android.graphics.Bitmap.Config.ARGB_8888)
+                val canvas = android.graphics.Canvas(bitmap)
+                canvas.drawColor(android.graphics.Color.BLACK)
+                val paint = android.graphics.Paint().apply {
+                    color = android.graphics.Color.WHITE
+                    textSize = 40f
+                    isAntiAlias = true
+                }
+                val tsText = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.US).format(Date())
+                canvas.drawText("OPTIX DRONECAM FPV SNAPSHOT", 60f, 90f, paint)
+                paint.textSize = 28f
+                canvas.drawText("UTC: $tsText", 60f, 140f, paint)
+                canvas.drawText("LAT: ${tel.rawLat} | LON: ${tel.rawLon}", 60f, 190f, paint)
+                canvas.drawText("ALT (GPS): ${tel.altitudeGps}m | REL (BARO): ${tel.altitudeBaro}m", 60f, 240f, paint)
+                canvas.drawText("SPEED: ${tel.speedKmh} km/h | HDG: ${tel.heading.toInt()}°", 60f, 290f, paint)
+
+                val bos = java.io.ByteArrayOutputStream()
+                bitmap.compress(android.graphics.Bitmap.CompressFormat.JPEG, 92, bos)
+                val photoFile = photoManager.saveSnapshot(bos.toByteArray(), tel)
+
+                reply(JSONObject().apply {
+                    put("type", "ack")
+                    put("cmd", "take_snapshot")
+                    put("success", photoFile != null)
+                    if (photoFile != null) {
+                        put("fileName", photoFile.name)
+                        put("lat", tel.rawLat)
+                        put("lon", tel.rawLon)
+                        put("altitude", tel.altitudeGps)
+                        put("downloadUrl", "/photos/${photoFile.name}")
+                    }
+                })
+
+                if (photoFile != null) {
+                    serverManager?.broadcastJson(JSONObject().apply {
+                        put("type", "new_snapshot")
+                        put("fileName", photoFile.name)
+                        put("lat", tel.rawLat)
+                        put("lon", tel.rawLon)
+                        put("altitude", tel.altitudeGps)
+                        put("downloadUrl", "/photos/${photoFile.name}")
+                    })
+                }
             }
             "set_mode" -> {
                 val modeStr = command.optString("mode", "PHONE")
@@ -454,13 +640,19 @@ class StreamingService : LifecycleService() {
                 } catch (_: Exception) {
                     CameraMode.PHONE
                 }
-                _uiState.value = _uiState.value.copy(cameraMode = newMode)
-                val streamMode = when (newMode) {
-                    CameraMode.PHONE -> StreamMode.PHONE
-                    CameraMode.USB -> StreamMode.USB
-                    CameraMode.BOTH -> StreamMode.BOTH
+                if (newMode != _uiState.value.cameraMode) {
+                    _uiState.value = _uiState.value.copy(cameraMode = newMode)
+                    val streamMode = when (newMode) {
+                        CameraMode.PHONE -> StreamMode.PHONE
+                        CameraMode.USB -> StreamMode.USB
+                        CameraMode.BOTH -> StreamMode.BOTH
+                    }
+                    webRtcManager?.setStreamMode(streamMode)
+                    serverManager?.broadcastJson(JSONObject().apply {
+                        put("type", "mode_changed")
+                        put("mode", newMode.name)
+                    })
                 }
-                webRtcManager?.setStreamMode(streamMode)
                 reply(JSONObject().apply {
                     put("type", "ack")
                     put("cmd", "set_mode")
@@ -476,7 +668,34 @@ class StreamingService : LifecycleService() {
         }
     }
 
+    private fun startAdaptiveQualityLoop() {
+        adaptiveQualityJob?.cancel()
+        adaptiveQualityJob = lifecycleScope.launch {
+            while (isActive) {
+                delay(3000)
+                if (!isAdaptiveQualityEnabled) continue
+
+                val rssi = networkHelper.signalInfo.value.rssiDbm
+                if (rssi == 0) continue
+
+                val targetPreset = when {
+                    rssi < -78 -> QualityPreset.FAST_LOW_LATENCY
+                    rssi in -78..-65 -> QualityPreset.BALANCED
+                    else -> QualityPreset.HIGH_FIDELITY
+                }
+                webRtcManager?.applyQualityPreset(targetPreset)
+            }
+        }
+    }
+
     private fun stopServer() {
+        adaptiveQualityJob?.cancel()
+        adaptiveQualityJob = null
+        try {
+            gpsManager.stop()
+            trackDatabase.endSession()
+        } catch (_: Exception) {}
+
         try {
             webRtcManager?.closeAllPeerConnections()
             webRtcManager?.stopCameraCapture()

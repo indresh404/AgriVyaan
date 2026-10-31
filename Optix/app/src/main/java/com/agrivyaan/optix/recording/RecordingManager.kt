@@ -3,13 +3,17 @@ package com.agrivyaan.optix.recording
 import android.content.Context
 import android.media.MediaScannerConnection
 import android.util.Log
+import com.agrivyaan.optix.gps.GpsTelemetry
 import com.agrivyaan.optix.webrtc.WebRtcManager
+import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
+import java.io.FileOutputStream
+import java.io.OutputStreamWriter
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -55,6 +59,8 @@ class RecordingManager(
 
     private var activeRecorder: VideoRecorder? = null
     private var activeOutputFile: File? = null
+    private var srtJob: Job? = null
+    var getTelemetry: (() -> GpsTelemetry?)? = null
 
     @Synchronized
     fun startRecording(
@@ -101,10 +107,37 @@ class RecordingManager(
         rtc.setRecordingSink(recorder)
 
         _isRecording.value = true
-        _recordingStartTime.value = System.currentTimeMillis()
+        val startMs = System.currentTimeMillis()
+        _recordingStartTime.value = startMs
         _currentFileName.value = fileName
 
-        Log.i(tag, "Continuous local recording started: $fileName")
+        // GPS Subtitle sidecar writer
+        val srtFile = File(recordingsDir, "${fileName.removeSuffix(".mp4")}.srt")
+        srtJob = CoroutineScope(Dispatchers.IO).launch {
+            var srtIndex = 1
+            try {
+                FileOutputStream(srtFile, true).use { fos ->
+                    OutputStreamWriter(fos, Charsets.UTF_8).use { writer ->
+                        while (isActive && _isRecording.value) {
+                            val sec = ((System.currentTimeMillis() - startMs) / 1000L).toInt()
+                            val startS = String.format(Locale.US, "%02d:%02d:%02d,000", sec / 3600, (sec % 3600) / 60, sec % 60)
+                            val endS = String.format(Locale.US, "%02d:%02d:%02d,990", (sec + 1) / 3600, ((sec + 1) % 3600) / 60, (sec + 1) % 60)
+                            val t = getTelemetry?.invoke()
+                            if (t != null && t.rawLat != 0.0) {
+                                writer.write("$srtIndex\n$startS --> $endS\nLAT: ${String.format(Locale.US, "%.5f", t.rawLat)}° | LON: ${String.format(Locale.US, "%.5f", t.rawLon)}° | ALT: ${String.format(Locale.US, "%.1f", t.altitudeBaro)}m | SPD: ${String.format(Locale.US, "%.1f", t.speedKmh)} km/h | HDG: ${t.heading.toInt()}°\n\n")
+                                writer.flush()
+                                srtIndex++
+                            }
+                            delay(1000)
+                        }
+                    }
+                }
+            } catch (e: Exception) {
+                Log.w(tag, "SRT sidecar writer error: ${e.message}")
+            }
+        }
+
+        Log.i(tag, "Continuous local recording started: $fileName (with GPS subtitle sidecar)")
         return true
     }
 
@@ -113,6 +146,9 @@ class RecordingManager(
         if (!_isRecording.value && activeRecorder == null) {
             return null
         }
+
+        srtJob?.cancel()
+        srtJob = null
 
         Log.i(tag, "Stopping local recording...")
         val rtc = getWebRtcManager()

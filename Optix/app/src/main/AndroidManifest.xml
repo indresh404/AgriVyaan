@@ -12,6 +12,12 @@
     <uses-permission android:name="android.permission.CAMERA" />
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
 
+    <!-- Location & GPS Tracking -->
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
+    <uses-permission android:name="android.permission.ACCESS_BACKGROUND_LOCATION" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_LOCATION" />
+
     <!-- Foreground Service & Power Management -->
     <uses-permission android:name="android.permission.WAKE_LOCK" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
@@ -75,7 +81,7 @@
         <service
             android:name=".service.StreamingService"
             android:exported="false"
-            android:foregroundServiceType="camera|connectedDevice" />
+            android:foregroundServiceType="camera|connectedDevice|location" />
 
         <!-- Boot Receiver for Auto-Start if enabled -->
         <receiver

@@ -266,6 +266,111 @@ fun MainScreen(
                 }
             }
 
+            // GPS Telemetry & Pre-Flight Fix Card
+            val isGpsReady = remember(state.telemetry) {
+                state.telemetry.fixType.contains("3D", ignoreCase = true) &&
+                        state.telemetry.accuracy <= 7.0f &&
+                        state.telemetry.satellitesUsed >= 6
+            }
+
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                colors = CardDefaults.cardColors(
+                    containerColor = if (isGpsReady) Color(0xFF132B1A) else Color(0xFF262615)
+                ),
+                shape = RoundedCornerShape(12.dp)
+            ) {
+                Column(modifier = Modifier.padding(14.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text("🛰️", fontSize = 16.sp)
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(
+                                "GPS TELEMETRY & PRE-FLIGHT",
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 12.sp,
+                                color = if (isGpsReady) Color(0xFF00E676) else Color(0xFFFFB300)
+                            )
+                        }
+                        Surface(
+                            shape = RoundedCornerShape(4.dp),
+                            color = if (isGpsReady) Color(0xFF1B5E20) else Color(0xFF4A3400)
+                        ) {
+                            Text(
+                                if (isGpsReady) "GPS READY" else "WAITING FOR FIX",
+                                fontSize = 10.sp,
+                                fontWeight = FontWeight.Bold,
+                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+                                color = Color.White
+                            )
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(8.dp))
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Column {
+                            Text("COORDINATES", fontSize = 9.sp, fontWeight = FontWeight.Bold, color = Color.Gray)
+                            Text(
+                                "${String.format("%.5f", state.telemetry.lat)}°, ${String.format("%.5f", state.telemetry.lon)}°",
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                fontFamily = FontFamily.Monospace
+                            )
+                        }
+                        Column(horizontalAlignment = Alignment.End) {
+                            Text("FIX / SATS", fontSize = 9.sp, fontWeight = FontWeight.Bold, color = Color.Gray)
+                            Text(
+                                "${state.telemetry.fixType} • ${state.telemetry.satellitesUsed}/${state.telemetry.satellitesVisible} sats",
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.SemiBold
+                            )
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(6.dp))
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Column {
+                            Text("ACCURACY", fontSize = 9.sp, fontWeight = FontWeight.Bold, color = Color.Gray)
+                            Text(
+                                "±${String.format("%.1f", state.telemetry.accuracy)}m",
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = if (state.telemetry.accuracy <= 5f) Color(0xFF00E676) else Color(0xFFFFB300)
+                            )
+                        }
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            Text("ALTITUDE (AGL / MSL)", fontSize = 9.sp, fontWeight = FontWeight.Bold, color = Color.Gray)
+                            Text(
+                                "${String.format("%.1f", state.telemetry.altitudeBaro)}m / ${String.format("%.1f", state.telemetry.altitudeGps)}m",
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.SemiBold
+                            )
+                        }
+                        Column(horizontalAlignment = Alignment.End) {
+                            Text("CAM QUALITY", fontSize = 9.sp, fontWeight = FontWeight.Bold, color = Color.Gray)
+                            Text(
+                                state.qualityPreset,
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = Color(0xFF00E5FF)
+                            )
+                        }
+                    }
+                }
+            }
+
             // Screen Lock / Device Admin Notice
             if (!state.isDeviceAdminActive) {
                 Card(

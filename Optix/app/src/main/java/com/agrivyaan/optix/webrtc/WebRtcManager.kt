@@ -17,10 +17,18 @@ import kotlinx.coroutines.launch
 import org.json.JSONObject
 import org.webrtc.*
 
+import java.nio.ByteBuffer
+import java.util.Collections
 import java.util.concurrent.ConcurrentHashMap
 
 enum class StreamMode {
     PHONE, USB, BOTH
+}
+
+enum class QualityPreset(val width: Int, val height: Int, val fps: Int, val targetBitrateKbps: Int) {
+    FAST_LOW_LATENCY(854, 480, 30, 800),     // 480p, 800 kbps: Ultra-fast low latency, weak Wi-Fi saving
+    BALANCED(1280, 720, 30, 2000),           // 720p, 2000 kbps: High performance balanced
+    HIGH_FIDELITY(1920, 1080, 30, 3500)      // 1080p, 3500 kbps: Full HD clarity
 }
 
 class WebRtcManager(
@@ -55,12 +63,15 @@ class WebRtcManager(
     // Active PeerConnections & DataChannels keyed by unique client/viewer ID
     private val clientPeerConnections = ConcurrentHashMap<String, PeerConnection>()
     private val clientDataChannels = ConcurrentHashMap<String, DataChannel>()
+    private val pendingRemoteCandidates = ConcurrentHashMap<String, MutableList<IceCandidate>>()
+    val clientPeerConnectionsCount: Int get() = clientPeerConnections.size
 
     // State
     private val _isStreaming = MutableStateFlow(false)
     val isStreaming: StateFlow<Boolean> = _isStreaming.asStateFlow()
 
     private var activeMode = StreamMode.PHONE
+    private var isPhoneCapturing = false
     private var currentWidth = 1280
     private var currentHeight = 720
     private var currentFps = 30
@@ -143,9 +154,11 @@ class WebRtcManager(
                 }
                 override fun onFirstFrameAvailable() {
                     Log.i(tag, "First phone camera frame available!")
+                    isPhoneCapturing = true
                 }
                 override fun onCameraClosed() {
                     Log.i(tag, "Phone camera closed")
+                    isPhoneCapturing = false
                 }
             })
 
@@ -153,6 +166,7 @@ class WebRtcManager(
             phoneSource = factory.createVideoSource(phoneCapturer!!.isScreencast)
             phoneCapturer!!.initialize(phoneTextureHelper, context, phoneSource!!.capturerObserver)
             phoneCapturer!!.startCapture(width, height, fps)
+            isPhoneCapturing = true
 
             phoneVideoTrack = factory.createVideoTrack("OPTIX_PHONE_TRACK", phoneSource).apply {
                 setEnabled(true)
@@ -208,6 +222,10 @@ class WebRtcManager(
 
     @Synchronized
     fun setStreamMode(mode: StreamMode) {
+        if (activeMode == mode) {
+            Log.d(tag, "Stream mode already $mode, no-op")
+            return
+        }
         val previousMode = activeMode
         activeMode = mode
         Log.i(tag, "Stream mode changed from $previousMode to: $mode")
@@ -215,6 +233,7 @@ class WebRtcManager(
         if (mode == StreamMode.USB) {
             try {
                 phoneCapturer?.stopCapture()
+                isPhoneCapturing = false
                 phoneVideoTrack?.setEnabled(false)
             } catch (e: Exception) {
                 Log.w(tag, "Pausing phone capturer: ${e.message}")
@@ -275,16 +294,12 @@ class WebRtcManager(
 
     private fun ensurePhoneCameraCapturing() {
         try {
-            if (phoneCapturer == null) {
-                val enumerator = Camera2Enumerator(context)
-                val deviceName = availablePhoneDevices.getOrNull(currentPhoneDeviceIndex)
-                    ?: availablePhoneDevices.firstOrNull() ?: "0"
-                if (phoneSource != null && phoneTextureHelper != null) {
-                    phoneCapturer = enumerator.createCapturer(deviceName, null)
-                    phoneCapturer?.initialize(phoneTextureHelper, context, phoneSource!!.capturerObserver)
-                }
+            if (phoneCapturer == null || phoneVideoTrack == null) {
+                startPhoneCamera(currentWidth, currentHeight, currentFps)
+            } else if (!isPhoneCapturing) {
+                phoneCapturer?.startCapture(currentWidth, currentHeight, currentFps)
+                isPhoneCapturing = true
             }
-            phoneCapturer?.startCapture(currentWidth, currentHeight, currentFps)
         } catch (e: Exception) {
             Log.w(tag, "ensurePhoneCameraCapturing: ${e.message}")
         }
@@ -298,9 +313,9 @@ class WebRtcManager(
                 phoneVideoTrack?.setEnabled(true)
             }
             if (activeMode == StreamMode.USB || activeMode == StreamMode.BOTH) {
-                usbCapturer?.reopenCamera()
-                usbCapturer?.startCapture(currentWidth, currentHeight, currentFps)
-                usbVideoTrack?.setEnabled(true)
+                if (isUsbConnected && usbCapturer != null) {
+                    usbVideoTrack?.setEnabled(true)
+                }
             }
             _isStreaming.value = true
             Log.i(tag, "Camera capture confirmed active for mode: $activeMode")
@@ -439,29 +454,28 @@ class WebRtcManager(
     }
 
     private fun boostSdpBitrate(sdp: String): String {
-        val lines = sdp.split("\r\n").toMutableList()
+        val lines = sdp.split("\r\n")
         val result = mutableListOf<String>()
         var inVideo = false
 
         for (line in lines) {
+            // Remove existing bandwidth lines to avoid duplicates
+            if (line.startsWith("b=AS:") || line.startsWith("b=TIAS:")) {
+                continue
+            }
             if (line.startsWith("m=video")) {
                 inVideo = true
                 result.add(line)
                 // 2500 kbps: Ultra-smooth low latency without Wi-Fi bufferbloat
                 result.add("b=AS:2500")
                 result.add("b=TIAS:2500000")
-                result.add("a=x-google-min-bitrate=1500")
+                result.add("a=x-google-min-bitrate=1000")
                 result.add("a=x-google-max-bitrate=2500")
-                result.add("a=x-google-start-bitrate=2000")
+                result.add("a=x-google-start-bitrate=1800")
                 continue
             }
             if (line.startsWith("m=audio") || line.startsWith("m=application")) {
                 inVideo = false
-            }
-            if (inVideo && line.startsWith("c=IN")) {
-                result.add(line)
-                result.add("b=AS:2500")
-                continue
             }
             result.add(line)
         }
@@ -478,6 +492,18 @@ class WebRtcManager(
             override fun onCreateSuccess(p0: SessionDescription?) {}
             override fun onSetSuccess() {
                 Log.i(tag, "Remote SDP answer set successfully for client $clientId! Live stream transmitting!")
+                // Flush pending remote candidates for this client
+                pendingRemoteCandidates.remove(clientId)?.let { list ->
+                    synchronized(list) {
+                        for (cand in list) {
+                            try {
+                                pc.addIceCandidate(cand)
+                            } catch (e: Exception) {
+                                Log.w(tag, "Error applying queued ICE candidate for $clientId: ${e.message}")
+                            }
+                        }
+                    }
+                }
             }
             override fun onCreateFailure(err: String?) {
                 Log.e(tag, "Remote SDP answer error for $clientId: $err")
@@ -489,14 +515,21 @@ class WebRtcManager(
     }
 
     fun handleRemoteIceCandidate(clientId: String, sdp: String, sdpMid: String?, sdpMLineIndex: Int) {
-        val pc = clientPeerConnections[clientId] ?: return
+        val pc = clientPeerConnections[clientId]
         val candidate = IceCandidate(sdpMid ?: "0", sdpMLineIndex, sdp)
-        pc.addIceCandidate(candidate)
+        if (pc != null && pc.remoteDescription != null) {
+            pc.addIceCandidate(candidate)
+        } else {
+            pendingRemoteCandidates.getOrPut(clientId) {
+                Collections.synchronizedList(mutableListOf())
+            }.add(candidate)
+        }
     }
 
     @Synchronized
     fun closeClientConnection(clientId: String) {
         try {
+            pendingRemoteCandidates.remove(clientId)
             clientDataChannels.remove(clientId)?.let { dc ->
                 try {
                     dc.close()
@@ -635,6 +668,30 @@ class WebRtcManager(
         phoneCapturer?.changeCaptureFormat(width, height, fps)
         usbCapturer?.changeCaptureFormat(width, height, fps)
         Log.i(tag, "Quality format set to ${width}x${height} @ ${fps}fps")
+    }
+
+    fun applyQualityPreset(preset: QualityPreset) {
+        setQualityPreset(preset.width, preset.height, preset.fps)
+        Log.i(tag, "Applied quality preset: ${preset.name} (${preset.width}x${preset.height} @ ${preset.fps}fps, ${preset.targetBitrateKbps} kbps)")
+    }
+
+    fun broadcastDataChannel(message: String): Boolean {
+        if (clientDataChannels.isEmpty()) return false
+        return try {
+            val bytes = message.toByteArray(Charsets.UTF_8)
+            val buffer = DataChannel.Buffer(ByteBuffer.wrap(bytes), false)
+            var sent = false
+            for (dc in clientDataChannels.values) {
+                if (dc.state() == DataChannel.State.OPEN) {
+                    dc.send(buffer)
+                    sent = true
+                }
+            }
+            sent
+        } catch (e: Exception) {
+            Log.w(tag, "broadcastDataChannel error: ${e.message}")
+            false
+        }
     }
 
     fun stopCameraCapture() {

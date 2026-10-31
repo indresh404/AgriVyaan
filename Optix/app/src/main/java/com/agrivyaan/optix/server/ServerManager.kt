@@ -3,8 +3,14 @@ package com.agrivyaan.optix.server
 import android.content.Context
 import android.util.Log
 import com.agrivyaan.optix.audio.SoundManager
+import com.agrivyaan.optix.gps.GpsTelemetry
+import com.agrivyaan.optix.gps.TrackDatabase
+import com.agrivyaan.optix.map.FlightMissionManager
+import com.agrivyaan.optix.map.MbTilesManager
+import com.agrivyaan.optix.map.Waypoint
 import com.agrivyaan.optix.network.NetworkHelper
 import com.agrivyaan.optix.power.PowerManagerHelper
+import com.agrivyaan.optix.recording.PhotoManager
 import com.agrivyaan.optix.recording.RecordingManager
 import fi.iki.elonen.NanoHTTPD
 import fi.iki.elonen.NanoWSD
@@ -14,7 +20,9 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import org.json.JSONArray
 import org.json.JSONObject
+import java.io.ByteArrayInputStream
 import java.io.File
 import java.io.FileInputStream
 import java.io.InputStream
@@ -28,6 +36,11 @@ class ServerManager(
     private val networkHelper: NetworkHelper,
     private val soundManager: SoundManager,
     private val recordingManager: RecordingManager,
+    private val trackDatabase: TrackDatabase? = null,
+    private val mbTilesManager: MbTilesManager? = null,
+    private val flightMissionManager: FlightMissionManager? = null,
+    private val photoManager: PhotoManager? = null,
+    private val getGpsTelemetry: (() -> GpsTelemetry)? = null,
     private val onCommandReceived: (clientId: String, command: JSONObject, reply: (JSONObject) -> Unit) -> Unit,
     private val onClientDisconnected: ((clientId: String) -> Unit)? = null
 ) : NanoWSD(port) {
@@ -65,6 +78,36 @@ class ServerManager(
             return withCors(serveAsset("ground/app.js", "application/javascript"))
         } else if (uri == "/style.css") {
             return withCors(serveAsset("ground/style.css", "text/css"))
+        } else if (uri.startsWith("/leaflet/")) {
+            val assetPath = "ground$uri"
+            val mime = when {
+                uri.endsWith(".js") -> "application/javascript"
+                uri.endsWith(".css") -> "text/css"
+                uri.endsWith(".png") -> "image/png"
+                else -> "application/octet-stream"
+            }
+            return withCors(serveAsset(assetPath, mime))
+        }
+
+        // Offline MBTiles Tile Server (/tiles/{layer}/{z}/{x}/{y}.png)
+        if (uri.startsWith("/tiles/")) {
+            val parts = uri.removePrefix("/tiles/").split("/")
+            val layer = if (parts.size >= 4) parts[0] else "default"
+            val z = if (parts.size >= 4) parts[1].toIntOrNull() else parts.getOrNull(0)?.toIntOrNull()
+            val x = if (parts.size >= 4) parts[2].toIntOrNull() else parts.getOrNull(1)?.toIntOrNull()
+            val yStr = if (parts.size >= 4) parts[3] else parts.getOrNull(2)
+            val y = yStr?.substringBefore(".")?.toIntOrNull()
+
+            if (z != null && x != null && y != null && mbTilesManager != null) {
+                val tileBytes = mbTilesManager.getTile(layer, z, x, y)
+                if (tileBytes != null && tileBytes.isNotEmpty()) {
+                    val mime = if (tileBytes.size > 2 && tileBytes[0] == 0xFF.toByte() && tileBytes[1] == 0xD8.toByte()) "image/jpeg" else "image/png"
+                    val response = newFixedLengthResponse(Response.Status.OK, mime, ByteArrayInputStream(tileBytes), tileBytes.size.toLong())
+                    response.addHeader("Cache-Control", "public, max-age=604800")
+                    return withCors(response)
+                }
+            }
+            return withCors(newFixedLengthResponse(Response.Status.NO_CONTENT, "image/png", ""))
         }
 
         // Available sounds list API
@@ -121,6 +164,262 @@ class ServerManager(
             } else {
                 withCors(newFixedLengthResponse(Response.Status.NOT_FOUND, MIME_PLAINTEXT, "Recording not found"))
             }
+        }
+
+        // Recorded photo snapshots download & stream
+        if (uri.startsWith("/photos/")) {
+            val fileName = uri.removePrefix("/photos/")
+            val file = photoManager?.getPhotoFile(fileName)
+            return if (file != null && file.exists()) {
+                val stream = FileInputStream(file)
+                val isDownload = session.parameters["download"]?.firstOrNull() == "1"
+                val disposition = if (isDownload) "attachment; filename=\"$fileName\"" else "inline; filename=\"$fileName\""
+                val response = newFixedLengthResponse(Response.Status.OK, "image/jpeg", stream, file.length()).apply {
+                    addHeader("Content-Disposition", disposition)
+                }
+                withCors(response)
+            } else {
+                withCors(newFixedLengthResponse(Response.Status.NOT_FOUND, MIME_PLAINTEXT, "Photo not found"))
+            }
+        }
+
+        // Map Layers API
+        if (uri == "/api/maps" && method == Method.GET) {
+            val jsonArray = mbTilesManager?.getLayersJson() ?: JSONArray()
+            return withCors(newFixedLengthResponse(Response.Status.OK, "application/json", jsonArray.toString()))
+        }
+
+        if (uri == "/api/maps/estimate" && method == Method.GET) {
+            val minLat = session.parameters["minLat"]?.firstOrNull()?.toDoubleOrNull() ?: 0.0
+            val minLon = session.parameters["minLon"]?.firstOrNull()?.toDoubleOrNull() ?: 0.0
+            val maxLat = session.parameters["maxLat"]?.firstOrNull()?.toDoubleOrNull() ?: 0.0
+            val maxLon = session.parameters["maxLon"]?.firstOrNull()?.toDoubleOrNull() ?: 0.0
+            val minZ = session.parameters["minZoom"]?.firstOrNull()?.toIntOrNull() ?: 10
+            val maxZ = session.parameters["maxZoom"]?.firstOrNull()?.toIntOrNull() ?: 16
+            val count = mbTilesManager?.estimateTileCount(minLat, minLon, maxLat, maxLon, minZ, maxZ) ?: 0L
+            val estBytes = count * 20 * 1024L
+            val resp = JSONObject().apply {
+                put("totalTiles", count)
+                put("estBytes", estBytes)
+                put("estMb", (estBytes / (1024.0 * 1024.0) * 10.0).toInt() / 10.0)
+            }
+            return withCors(newFixedLengthResponse(Response.Status.OK, "application/json", resp.toString()))
+        }
+
+        if (uri == "/api/maps/download" && method == Method.POST) {
+            val map = HashMap<String, String>()
+            session.parseBody(map)
+            val postData = map["postData"] ?: ""
+            val json = if (postData.isNotEmpty()) JSONObject(postData) else JSONObject()
+            val name = json.optString("name", "custom_map")
+            val urlTemplate = json.optString("urlTemplate", "")
+            val minLat = json.optDouble("minLat", 0.0)
+            val minLon = json.optDouble("minLon", 0.0)
+            val maxLat = json.optDouble("maxLat", 0.0)
+            val maxLon = json.optDouble("maxLon", 0.0)
+            val minZ = json.optInt("minZoom", 10)
+            val maxZ = json.optInt("maxZoom", 16)
+
+            val started = mbTilesManager?.startDownloadArea(name, urlTemplate, minLat, minLon, maxLat, maxLon, minZ, maxZ) ?: false
+            val resp = JSONObject().apply {
+                put("success", started)
+            }
+            return withCors(newFixedLengthResponse(Response.Status.OK, "application/json", resp.toString()))
+        }
+
+        if (uri == "/api/maps/download/progress" && method == Method.GET) {
+            val progress = mbTilesManager?.getDownloadProgress() ?: JSONObject()
+            return withCors(newFixedLengthResponse(Response.Status.OK, "application/json", progress.toString()))
+        }
+
+        if (uri == "/api/maps/download/pause" && method == Method.POST) {
+            mbTilesManager?.pauseDownload()
+            return withCors(newFixedLengthResponse(Response.Status.OK, "application/json", "{\"status\":\"paused\"}"))
+        }
+
+        if (uri == "/api/maps/download/resume" && method == Method.POST) {
+            mbTilesManager?.resumeDownload()
+            return withCors(newFixedLengthResponse(Response.Status.OK, "application/json", "{\"status\":\"running\"}"))
+        }
+
+        if (uri == "/api/maps/download/cancel" && method == Method.POST) {
+            mbTilesManager?.cancelDownload()
+            return withCors(newFixedLengthResponse(Response.Status.OK, "application/json", "{\"status\":\"cancelled\"}"))
+        }
+
+        if (uri == "/api/maps/delete" && (method == Method.POST || method == Method.DELETE)) {
+            val layerId = session.parameters["id"]?.firstOrNull() ?: ""
+            val deleted = mbTilesManager?.deleteLayer(layerId) ?: false
+            val resp = JSONObject().apply {
+                put("success", deleted)
+                put("id", layerId)
+            }
+            return withCors(newFixedLengthResponse(Response.Status.OK, "application/json", resp.toString()))
+        }
+
+        // Tracks API
+        if (uri == "/api/tracks" && method == Method.GET) {
+            val sessions = trackDatabase?.getAllSessions() ?: emptyList()
+            val array = JSONArray()
+            for (s in sessions) array.put(s.toJson())
+            return withCors(newFixedLengthResponse(Response.Status.OK, "application/json", array.toString()))
+        }
+
+        if (uri == "/api/tracks/points" && method == Method.GET) {
+            val sessionId = session.parameters["sessionId"]?.firstOrNull() ?: ""
+            val points = trackDatabase?.getSessionPoints(sessionId) ?: JSONArray()
+            return withCors(newFixedLengthResponse(Response.Status.OK, "application/json", points.toString()))
+        }
+
+        if (uri == "/api/tracks/export" && method == Method.GET) {
+            val sessionId = session.parameters["sessionId"]?.firstOrNull() ?: ""
+            val format = session.parameters["format"]?.firstOrNull()?.lowercase() ?: "gpx"
+            val file = when (format) {
+                "kml" -> trackDatabase?.exportKml(sessionId)
+                "csv" -> trackDatabase?.exportCsv(sessionId)
+                else -> trackDatabase?.exportGpx(sessionId)
+            }
+            return if (file != null && file.exists()) {
+                val stream = FileInputStream(file)
+                val mime = when (format) {
+                    "kml" -> "application/vnd.google-earth.kml+xml"
+                    "csv" -> "text/csv"
+                    else -> "application/gpx+xml"
+                }
+                val response = newFixedLengthResponse(Response.Status.OK, mime, stream, file.length()).apply {
+                    addHeader("Content-Disposition", "attachment; filename=\"${file.name}\"")
+                }
+                withCors(response)
+            } else {
+                withCors(newFixedLengthResponse(Response.Status.NOT_FOUND, MIME_PLAINTEXT, "Track not found"))
+            }
+        }
+
+        if (uri == "/api/tracks/delete" && (method == Method.POST || method == Method.DELETE)) {
+            val sessionId = session.parameters["sessionId"]?.firstOrNull() ?: ""
+            val deleted = trackDatabase?.deleteSession(sessionId) ?: false
+            val resp = JSONObject().apply {
+                put("success", deleted)
+                put("sessionId", sessionId)
+            }
+            return withCors(newFixedLengthResponse(Response.Status.OK, "application/json", resp.toString()))
+        }
+
+        // Waypoints & Fields & Geofence
+        if (uri == "/api/waypoints" && method == Method.GET) {
+            val array = flightMissionManager?.getWaypointsJson() ?: JSONArray()
+            return withCors(newFixedLengthResponse(Response.Status.OK, "application/json", array.toString()))
+        }
+
+        if (uri == "/api/waypoints" && method == Method.POST) {
+            val map = HashMap<String, String>()
+            session.parseBody(map)
+            val json = JSONObject(map["postData"] ?: "{}")
+            val wp = Waypoint(
+                name = json.optString("name", "Waypoint"),
+                lat = json.optDouble("lat", 0.0),
+                lon = json.optDouble("lon", 0.0),
+                category = json.optString("category", "Marker"),
+                description = json.optString("description", "")
+            )
+            val added = flightMissionManager?.addWaypoint(wp) ?: false
+            val resp = JSONObject().apply {
+                put("success", added)
+                put("waypoint", wp.toJson())
+            }
+            return withCors(newFixedLengthResponse(Response.Status.OK, "application/json", resp.toString()))
+        }
+
+        if (uri == "/api/waypoints/delete" && (method == Method.POST || method == Method.DELETE)) {
+            val id = session.parameters["id"]?.firstOrNull() ?: ""
+            val deleted = flightMissionManager?.deleteWaypoint(id) ?: false
+            val resp = JSONObject().apply {
+                put("success", deleted)
+                put("id", id)
+            }
+            return withCors(newFixedLengthResponse(Response.Status.OK, "application/json", resp.toString()))
+        }
+
+        if (uri == "/api/fields" && method == Method.GET) {
+            val array = flightMissionManager?.getFieldsJson() ?: JSONArray()
+            return withCors(newFixedLengthResponse(Response.Status.OK, "application/json", array.toString()))
+        }
+
+        if (uri == "/api/fields" && method == Method.POST) {
+            val map = HashMap<String, String>()
+            session.parseBody(map)
+            val json = JSONObject(map["postData"] ?: "{}")
+            val name = json.optString("name", "Field")
+            val ptsJson = json.optJSONArray("points") ?: JSONArray()
+            val pts = mutableListOf<Pair<Double, Double>>()
+            for (i in 0 until ptsJson.length()) {
+                val p = ptsJson.getJSONArray(i)
+                pts.add(Pair(p.getDouble(0), p.getDouble(1)))
+            }
+            val field = flightMissionManager?.saveField(name, pts)
+            val resp = JSONObject().apply {
+                put("success", field != null)
+                if (field != null) put("field", field.toJson())
+            }
+            return withCors(newFixedLengthResponse(Response.Status.OK, "application/json", resp.toString()))
+        }
+
+        if (uri == "/api/fields/delete" && (method == Method.POST || method == Method.DELETE)) {
+            val id = session.parameters["id"]?.firstOrNull() ?: ""
+            val deleted = flightMissionManager?.deleteField(id) ?: false
+            val resp = JSONObject().apply {
+                put("success", deleted)
+                put("id", id)
+            }
+            return withCors(newFixedLengthResponse(Response.Status.OK, "application/json", resp.toString()))
+        }
+
+        if (uri == "/api/geofence" && method == Method.GET) {
+            val fm = flightMissionManager
+            val resp = JSONObject().apply {
+                put("active", fm?.isGeofenceActive ?: false)
+                put("radiusMeters", fm?.geofenceRadiusMeters ?: 300.0)
+                put("fieldId", fm?.geofenceFieldId ?: "")
+            }
+            return withCors(newFixedLengthResponse(Response.Status.OK, "application/json", resp.toString()))
+        }
+
+        if (uri == "/api/geofence" && method == Method.POST) {
+            val map = HashMap<String, String>()
+            session.parseBody(map)
+            val json = JSONObject(map["postData"] ?: "{}")
+            val fm = flightMissionManager
+            if (fm != null) {
+                if (json.has("active")) fm.isGeofenceActive = json.optBoolean("active", false)
+                if (json.has("radiusMeters")) fm.geofenceRadiusMeters = json.optDouble("radiusMeters", 300.0)
+                if (json.has("fieldId")) fm.geofenceFieldId = json.optString("fieldId", "")
+            }
+            val resp = JSONObject().apply {
+                put("success", true)
+                put("active", fm?.isGeofenceActive ?: false)
+                put("radiusMeters", fm?.geofenceRadiusMeters ?: 300.0)
+            }
+            return withCors(newFixedLengthResponse(Response.Status.OK, "application/json", resp.toString()))
+        }
+
+        if (uri == "/api/photos" && method == Method.GET) {
+            val array = photoManager?.getPhotosJson() ?: JSONArray()
+            return withCors(newFixedLengthResponse(Response.Status.OK, "application/json", array.toString()))
+        }
+
+        if (uri == "/api/photos/delete" && (method == Method.POST || method == Method.DELETE)) {
+            val fileName = session.parameters["fileName"]?.firstOrNull() ?: ""
+            val deleted = photoManager?.deletePhoto(fileName) ?: false
+            val resp = JSONObject().apply {
+                put("success", deleted)
+                put("fileName", fileName)
+            }
+            return withCors(newFixedLengthResponse(Response.Status.OK, "application/json", resp.toString()))
+        }
+
+        if (uri == "/api/telemetry" && method == Method.GET) {
+            val t = getGpsTelemetry?.invoke()?.toJson() ?: JSONObject()
+            return withCors(newFixedLengthResponse(Response.Status.OK, "application/json", t.toString()))
         }
 
         // Telemetry & Status API

@@ -4,6 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
   <title>Optix FPV Ground Control</title>
+  <link rel="stylesheet" href="leaflet/leaflet.css">
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
@@ -20,14 +21,28 @@
         <div class="ping-badge" id="pingBadge" title="Latency">
           <span id="pingValue">-- ms</span>
         </div>
+
+        <!-- Viewport Layout Switcher -->
+        <div class="layout-nav-cluster">
+          <button id="btnLayoutVideo" class="btn-top active" onclick="setViewLayout('video')" title="Video Only Fullscreen">📹 VID</button>
+          <button id="btnLayoutMap" class="btn-top" onclick="setViewLayout('map')" title="Offline Tactical Map Fullscreen">🗺️ MAP</button>
+          <button id="btnLayoutSplit" class="btn-top" onclick="setViewLayout('split')" title="Dual Split View (Video + Map)">◫ SPLIT</button>
+          <button id="btnLayoutPip" class="btn-top" onclick="setViewLayout('pip')" title="Picture-in-Picture Map">🗗 PIP</button>
+        </div>
       </div>
 
       <!-- Quick Action Tool Buttons at Top -->
       <div class="top-bar-tools">
+        <!-- Wi-Fi Adaptive Quality Switcher -->
+        <button id="btnCamQuality" class="btn-top" onclick="cycleQualityPreset()" title="Adaptive Wi-Fi Quality (Auto adjusts when signal weak to eliminate lag)">
+          <span class="btn-icon">⚡</span>
+          <span class="btn-text" id="lblCamQuality">AUTO (WIFI)</span>
+        </button>
+
         <!-- Stream Start/Stop Toggle Button -->
         <button id="btnStreamToggle" class="btn-top btn-stream-stop" onclick="toggleStreamState()">
           <span class="btn-icon">⏹</span>
-          <span class="btn-text" id="btnStreamText">STOP STREAM</span>
+          <span class="btn-text" id="btnStreamText">STOP</span>
         </button>
 
         <!-- Start / Stop Recording Button -->
@@ -39,13 +54,19 @@
         <!-- Camera Source (Phone / USB Webcam / Dual) -->
         <button id="btnCamSource" class="btn-top" onclick="cycleCameraSource()" title="Switch Camera: Phone / USB Webcam / Dual">
           <span class="btn-icon">📹</span>
-          <span class="btn-text" id="btnCamSourceText">CAM: PHONE</span>
+          <span class="btn-text" id="btnCamSourceText">PHONE</span>
         </button>
 
         <!-- Flip Lens -->
         <button id="btnQuickFlip" class="btn-top" onclick="switchCamera()" title="Switch Front/Rear Lens">
           <span class="btn-icon">🔄</span>
           <span class="btn-text">FLIP</span>
+        </button>
+
+        <!-- Geotagged Snapshot -->
+        <button id="btnQuickSnap" class="btn-top" onclick="captureSnapshot()" title="Capture High-Res Photo with GPS EXIF Geotag">
+          <span class="btn-icon">📸</span>
+          <span class="btn-text">SNAP</span>
         </button>
 
         <!-- Airplane Beacon Strobe -->
@@ -60,16 +81,10 @@
           <span class="btn-text">TORCH</span>
         </button>
 
-        <!-- Snapshot -->
-        <button id="btnQuickSnap" class="btn-top" onclick="captureSnapshot()" title="Capture High-Res Photo">
-          <span class="btn-icon">📸</span>
-          <span class="btn-text">SNAP</span>
-        </button>
-
         <!-- Fit / Full View Toggle -->
         <button id="btnQuickFit" class="btn-top" onclick="toggleVideoFit()" title="Toggle Full Clear View (16:9) vs Edge-to-Edge Fill">
           <span class="btn-icon">🔲</span>
-          <span class="btn-text" id="btnFitText">FIT/FILL</span>
+          <span class="btn-text" id="btnFitText">FIT</span>
         </button>
 
         <!-- FPV Reticle Crosshair Toggle -->
@@ -81,14 +96,15 @@
         <!-- All Tools & Settings Drawer Toggle -->
         <button id="btnOpenDrawer" class="btn-top btn-drawer-toggle" onclick="toggleToolsDrawer()" title="Open Controls & Settings Drawer">
           <span class="btn-icon">⚙</span>
-          <span class="btn-text">CONTROLS</span>
+          <span class="btn-text">MENU</span>
         </button>
       </div>
     </header>
 
-    <!-- Main Viewport Section (Full screen 100% video display) -->
-    <main class="viewport-section" id="viewport">
-      <div id="videoContainer" class="video-container mode-phone">
+    <!-- Main Viewport Section (Supports Video Big / Map Big / Split / PiP) -->
+    <main class="viewport-section layout-video-big" id="viewport">
+      <!-- Video Viewport Box -->
+      <div id="videoContainer" class="viewport-box video-box mode-phone">
         <!-- Phone Camera Video -->
         <div class="video-wrapper" id="wrapperPhone">
           <video id="remoteVideoPhone" autoplay playsinline muted></video>
@@ -193,6 +209,87 @@
           <button class="hud-icon-btn" onclick="toggleAudio()" id="btnMute" title="Toggle Audio">🔇</button>
         </div>
       </div>
+
+      <!-- Tactical Offline Map Viewport Box -->
+      <div id="mapContainer" class="viewport-box map-box">
+        <!-- Leaflet Map Container -->
+        <div id="leafletMap" class="leaflet-map-canvas"></div>
+
+        <!-- Plain Grid Fallback (Active when no offline map tiles are loaded) -->
+        <div id="mapGridFallback" class="map-grid-fallback" style="display:none;">
+          <div class="grid-crosshairs"></div>
+          <div class="grid-axis-label axis-n">NORTH 360°</div>
+          <div class="grid-axis-label axis-s">SOUTH 180°</div>
+          <div class="grid-axis-label axis-e">EAST 090°</div>
+          <div class="grid-axis-label axis-w">WEST 270°</div>
+          <div class="grid-watermark">TACTICAL GRID ACTIVE • OFFLINE SATELLITE/STREET MBTILES OPTIONAL</div>
+        </div>
+
+        <!-- Floating Map HUD - Top Flight Telemetry Strip -->
+        <div class="map-hud-top">
+          <div class="hud-chip compass-chip" id="mapHeadingChip" title="Drone Heading & Bearing">
+            <span class="compass-icon">🧭</span>
+            <span id="mapHeadingVal">000°</span>
+            <span class="chip-badge" id="mapHeadingSource">GPS</span>
+          </div>
+
+          <div class="hud-chip coords-chip" onclick="toggleCoordFormat()" title="Coordinates (Click to toggle Decimal / DMS)">
+            <span class="chip-icon">🌐</span>
+            <span id="mapCoordsText">0.000000°, 0.000000°</span>
+            <button class="btn-chip-copy" onclick="copyCoordinates(event)" title="Copy coordinates">📋</button>
+          </div>
+
+          <div class="hud-chip alt-chip">
+            <span title="Relative Altitude Above Ground Level (Barometer)">AGL: <b id="mapAltBaro">0.0m</b></span>
+            <span class="chip-sep">/</span>
+            <span title="GPS Altitude Above Sea Level (MSL)">MSL: <b id="mapAltGps">0.0m</b></span>
+          </div>
+
+          <div class="hud-chip speed-chip">
+            <span class="speed-main" id="mapSpeedKmh">0.0 km/h</span>
+            <span class="speed-mps" id="mapSpeedMps">(0.0 m/s)</span>
+          </div>
+        </div>
+
+        <!-- Floating Map HUD - Bottom Left Status Strip -->
+        <div class="map-hud-bottom-left">
+          <div class="hud-chip sat-chip">
+            <span class="chip-icon">🛰️</span>
+            <span id="mapFixType" class="fix-tag">Searching...</span>
+            <span id="mapSatCount">0 sats</span>
+            <span id="mapAccuracy">±--m</span>
+          </div>
+
+          <div class="hud-chip home-chip" id="mapHomeChip">
+            <span class="chip-icon">🏠</span>
+            <span id="mapHomeDistance">HOME: --m</span>
+            <span id="mapHomeBearing">(--°)</span>
+            <button class="btn-chip-action" onclick="resetHomePoint()" title="Set Home Point to current drone position">RESET</button>
+          </div>
+        </div>
+
+        <!-- Floating Map Quick Tools (Right side of Map) -->
+        <div class="map-quick-tools">
+          <button class="map-tool-btn active" id="btnFollowDrone" onclick="toggleFollowDrone()" title="Keep Drone Centered">🎯</button>
+          <button class="map-tool-btn" id="btnHeadingUp" onclick="toggleHeadingUp()" title="Toggle North-Up / Heading-Up">🧭</button>
+          <button class="map-tool-btn" id="btnFitTrack" onclick="fitTrackToBounds()" title="Zoom to Fit Full Flight Track">⛶</button>
+          <button class="map-tool-btn" id="btnLayerSwitch" onclick="cycleMapLayer()" title="Switch Map Layer: Street / Satellite / Terrain / Grid">🗺️</button>
+          <button class="map-tool-btn" id="btnDropPin" onclick="startDropWaypoint()" title="Drop Waypoint Marker on Map">📍</button>
+          <button class="map-tool-btn" id="btnDrawField" onclick="startDrawField()" title="Draw Field Boundary Polygon (Calculates Area & Perimeter)">📐</button>
+          <button class="map-tool-btn" id="btnMeasure" onclick="toggleMeasureTool()" title="Distance Measurement Tool">📏</button>
+          <button class="map-tool-btn" id="btnGeofence" onclick="openGeofenceModal()" title="Geofence Safety Boundary">🛡️</button>
+          <button class="map-tool-btn" id="btnAdminLocation" onclick="setAdminPositionPrompt()" title="Place My Ground Station Admin Pin on Map">👤</button>
+          <button class="map-tool-btn" id="btnOpenMaps" onclick="openMapsModal()" title="Offline MBTiles Manager & Area Downloader">💾</button>
+          <button class="map-tool-btn" id="btnOpenTracks" onclick="openTracksModal()" title="Flight Tracks History & GPX/KML Export">📈</button>
+        </div>
+
+        <!-- Flashing Geofence Breach Banner -->
+        <div id="geofenceAlertBanner" class="geofence-alert-banner" style="display:none;">
+          <span class="siren-pulse">🚨</span>
+          <span id="geofenceAlertText">GEOFENCE BREACH: Drone outside boundary!</span>
+          <button class="btn-dismiss-alert" onclick="dismissGeofenceAlert()">Mute Alert</button>
+        </div>
+      </div>
     </main>
 
     <!-- Slide-Out Tactical Controls & Tools Drawer -->
@@ -290,6 +387,36 @@
           </div>
         </div>
 
+        <!-- GPS & Offline Map Tactical Hub -->
+        <div class="drawer-section">
+          <div class="section-title-row">
+            <span class="section-title">GPS & FLIGHT TELEMETRY</span>
+            <button class="btn-clear" onclick="calibrateBarometer()">⛰ Calibrate AGL</button>
+          </div>
+          <div class="btn-cluster" style="margin-bottom:8px;">
+            <button class="btn btn-action" onclick="openMapsModal()">🗺️ Offline Maps</button>
+            <button class="btn btn-action" onclick="openTracksModal()">📈 Flight Tracks</button>
+            <button class="btn btn-action" onclick="openPhotosModal()">📸 Photo Gallery</button>
+          </div>
+          <div class="setting-item">
+            <label class="setting-label">GPS Update Frequency:</label>
+            <div class="btn-cluster">
+              <button class="btn btn-mode" id="btnGpsRate2" onclick="setGpsUpdateRate(500)">2 Hz (0.5s)</button>
+              <button class="btn btn-mode active" id="btnGpsRate1" onclick="setGpsUpdateRate(1000)">1 Hz (1s)</button>
+              <button class="btn btn-mode" id="btnGpsRate05" onclick="setGpsUpdateRate(2000)">0.5 Hz (2s)</button>
+            </div>
+          </div>
+          <div class="setting-item" style="margin-top:8px;">
+            <label class="setting-label">Wi-Fi Video Quality Preset:</label>
+            <div class="btn-cluster">
+              <button class="btn btn-mode active" id="btnQAuto" onclick="setQualityPreset('AUTO')">⚡ Auto</button>
+              <button class="btn btn-mode" id="btnQFast" onclick="setQualityPreset('FAST')">🚀 Fast (480p)</button>
+              <button class="btn btn-mode" id="btnQBal" onclick="setQualityPreset('BALANCED')">⚖️ 720p</button>
+              <button class="btn btn-mode" id="btnQHigh" onclick="setQualityPreset('HIGH')">🌟 1080p</button>
+            </div>
+          </div>
+        </div>
+
         <!-- HUD & Display Settings -->
         <div class="drawer-section">
           <span class="section-title">HUD DISPLAY OPTIONS</span>
@@ -328,6 +455,203 @@
     </div>
   </div>
 
+  <!-- Offline Map Manager & Area Downloader Modal -->
+  <div id="mapsModal" class="modal-backdrop" style="display:none;" onclick="closeMapsModal(event)">
+    <div class="modal-content modal-lg" onclick="event.stopPropagation()">
+      <div class="modal-header">
+        <span class="modal-title">🗺️ Offline Map Manager & MBTiles</span>
+        <button class="btn-close-modal" onclick="closeMapsModal()">✕</button>
+      </div>
+      <div class="modal-body">
+        <div class="modal-tabs">
+          <button class="modal-tab active" id="tabMapLayers" onclick="switchMapModalTab('layers')">Active Offline Layers</button>
+          <button class="modal-tab" id="tabMapDownload" onclick="switchMapModalTab('download')">📥 Download Map Area</button>
+        </div>
+
+        <!-- Layers Tab -->
+        <div id="secMapLayers" class="modal-tab-content">
+          <p style="font-size:0.85rem; color:#8b9bb4; margin-bottom:12px;">
+            Offline maps are stored as <b>MBTiles SQLite</b> databases on the drone phone and served locally without internet.
+          </p>
+          <div id="mapLayersList" class="layers-list-box">
+            <span style="color:#8b9bb4; font-size:0.8rem;">Loading layers...</span>
+          </div>
+        </div>
+
+        <!-- Download Area Tab -->
+        <div id="secMapDownload" class="modal-tab-content" style="display:none;">
+          <div class="alert-box-notice">
+            <span style="font-weight:bold;">⚠️ Map Licensing Notice:</span>
+            <span>Do NOT bulk-download from tile.openstreetmap.org (violates OSM tile usage policy). Use your own self-hosted tile server, a permitted provider with your API key, or open extracts (OpenMapTiles / Protomaps).</span>
+          </div>
+          <div class="form-grid">
+            <div class="form-group">
+              <label>Map Area Name:</label>
+              <input type="text" id="dlMapName" class="form-input" placeholder="e.g. farm_area_north" value="farm_flight_area">
+            </div>
+            <div class="form-group">
+              <label>Tile Server URL Template:</label>
+              <input type="text" id="dlUrlTemplate" class="form-input" placeholder="https://tile.example.com/{z}/{x}/{y}.png" value="https://tile.openstreetmap.bzh/br/{z}/{x}/{y}.png">
+            </div>
+            <div class="form-row">
+              <div class="form-group">
+                <label>Min Zoom (e.g. 11):</label>
+                <input type="number" id="dlMinZoom" class="form-input" value="11" min="1" max="19">
+              </div>
+              <div class="form-group">
+                <label>Max Zoom (e.g. 16):</label>
+                <input type="number" id="dlMaxZoom" class="form-input" value="16" min="1" max="19">
+              </div>
+            </div>
+            <div class="form-group">
+              <label>Bounding Coordinates (Current View or Draw):</label>
+              <button class="btn btn-action" onclick="useCurrentMapBoundsForDownload()">📍 Use Current Map View Bounding Box</button>
+              <span id="dlBoundsSummary" style="font-size:0.75rem; color:#00e5ff; margin-top:4px; display:block;"></span>
+            </div>
+            <div id="dlEstimateResult" style="font-size:0.85rem; color:#00e676; margin:8px 0; display:none;"></div>
+            <div id="dlProgressContainer" style="display:none; margin-top:12px;">
+              <div class="progress-bar-track">
+                <div id="dlProgressBar" class="progress-bar-fill" style="width:0%;"></div>
+              </div>
+              <div id="dlProgressText" style="font-size:0.8rem; color:#8b9bb4; margin-top:4px;">0 / 0 tiles (0%)</div>
+            </div>
+          </div>
+          <div class="modal-footer" style="padding:12px 0 0 0; margin-top:16px;">
+            <button class="btn btn-secondary" onclick="estimateMapDownload()">Estimate Tile Count</button>
+            <button id="btnStartDl" class="btn btn-success" onclick="startMapAreaDownload()">📥 Start Download</button>
+            <button id="btnPauseDl" class="btn btn-action" style="display:none;" onclick="pauseMapDownload()">⏸ Pause</button>
+            <button id="btnCancelDl" class="btn btn-danger" style="display:none;" onclick="cancelMapDownload()">✕ Cancel</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Flight Tracks History Modal -->
+  <div id="tracksModal" class="modal-backdrop" style="display:none;" onclick="closeTracksModal(event)">
+    <div class="modal-content modal-lg" onclick="event.stopPropagation()">
+      <div class="modal-header">
+        <span class="modal-title">📈 Flight Tracks & Black Box History</span>
+        <button class="btn-close-modal" onclick="closeTracksModal()">✕</button>
+      </div>
+      <div class="modal-body">
+        <p style="font-size:0.85rem; color:#8b9bb4; margin-bottom:12px;">
+          Flight tracks are recorded locally in the phone's SQLite black box database. Export to GPX or KML to open in Google Earth.
+        </p>
+        <div id="tracksList" class="recordings-list-box">
+          <span style="color:#8b9bb4; font-size:0.8rem;">Loading recorded tracks...</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Photo Gallery Modal -->
+  <div id="photosModal" class="modal-backdrop" style="display:none;" onclick="closePhotosModal(event)">
+    <div class="modal-content modal-lg" onclick="event.stopPropagation()">
+      <div class="modal-header">
+        <span class="modal-title">📸 Geotagged Snapshots Gallery</span>
+        <button class="btn-close-modal" onclick="closePhotosModal()">✕</button>
+      </div>
+      <div class="modal-body">
+        <div id="photosGrid" class="photos-grid">
+          <span style="color:#8b9bb4; font-size:0.8rem;">Loading snapshots...</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Waypoint Add/Edit Modal -->
+  <div id="waypointModal" class="modal-backdrop" style="display:none;" onclick="closeWaypointModal(event)">
+    <div class="modal-content" onclick="event.stopPropagation()">
+      <div class="modal-header">
+        <span class="modal-title">📍 Drop Waypoint Marker</span>
+        <button class="btn-close-modal" onclick="closeWaypointModal()">✕</button>
+      </div>
+      <div class="modal-body">
+        <div class="form-group">
+          <label>Marker Label:</label>
+          <input type="text" id="wpName" class="form-input" placeholder="e.g. Pest Spot, Water Pump, Obstacle">
+        </div>
+        <div class="form-group">
+          <label>Category:</label>
+          <select id="wpCategory" class="form-input">
+            <option value="Inspection">Inspection Spot</option>
+            <option value="Hazard">Obstacle / Hazard</option>
+            <option value="Water">Pump / Water Source</option>
+            <option value="Pest">Crop Disease / Pest</option>
+            <option value="General">General Marker</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label>Notes / Description:</label>
+          <textarea id="wpDesc" class="form-input" rows="2" placeholder="Optional field notes..."></textarea>
+        </div>
+        <div style="font-size:0.75rem; color:#8b9bb4;" id="wpCoordsPreview"></div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-secondary" onclick="closeWaypointModal()">Cancel</button>
+        <button class="btn btn-success" onclick="saveWaypointConfirm()">Save Marker</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Field Boundary Modal -->
+  <div id="fieldModal" class="modal-backdrop" style="display:none;" onclick="closeFieldModal(event)">
+    <div class="modal-content" onclick="event.stopPropagation()">
+      <div class="modal-header">
+        <span class="modal-title">📐 Save Field Boundary Polygon</span>
+        <button class="btn-close-modal" onclick="closeFieldModal()">✕</button>
+      </div>
+      <div class="modal-body">
+        <div class="form-group">
+          <label>Field Name:</label>
+          <input type="text" id="fieldName" class="form-input" placeholder="e.g. North Wheat Field">
+        </div>
+        <div id="fieldStatsPreview" style="background:#161c27; padding:10px; border-radius:6px; font-size:0.85rem; margin-bottom:12px;">
+          <div>Calculated Area: <b id="fieldAreaHectares" style="color:#00e676;">0.0 ha</b> (<span id="fieldAreaAcres">0.0 acres</span>)</div>
+          <div>Perimeter: <b id="fieldPerimeter" style="color:#00e5ff;">0.0 m</b></div>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-secondary" onclick="closeFieldModal()">Cancel</button>
+        <button class="btn btn-success" onclick="saveFieldConfirm()">Save Field</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Geofence Settings Modal -->
+  <div id="geofenceModal" class="modal-backdrop" style="display:none;" onclick="closeGeofenceModal(event)">
+    <div class="modal-content" onclick="event.stopPropagation()">
+      <div class="modal-header">
+        <span class="modal-title">🛡️ Geofence Safety Boundary</span>
+        <button class="btn-close-modal" onclick="closeGeofenceModal()">✕</button>
+      </div>
+      <div class="modal-body">
+        <div class="setting-item">
+          <label class="setting-label">Geofence Alarm State:</label>
+          <div class="btn-cluster">
+            <button class="btn btn-mode active" id="btnGeofenceOn" onclick="toggleGeofenceEnabled(true)">Active</button>
+            <button class="btn btn-mode" id="btnGeofenceOff" onclick="toggleGeofenceEnabled(false)">Disabled</button>
+          </div>
+        </div>
+        <div class="form-group" style="margin-top:12px;">
+          <label>Safety Radius Around Home (<span id="lblGeofenceRadius">300</span>m):</label>
+          <input type="range" id="geofenceRadiusSlider" min="50" max="2500" step="50" value="300" class="zoom-slider" oninput="updateGeofenceRadiusUI(this.value)">
+        </div>
+        <div class="form-group">
+          <label>Or Restrict To Saved Field Polygon:</label>
+          <select id="geofenceFieldSelect" class="form-input" onchange="updateGeofenceField(this.value)">
+            <option value="">Circular Radius Around Home</option>
+          </select>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-secondary" onclick="closeGeofenceModal()">Close</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="leaflet/leaflet.js"></script>
   <script src="app.js"></script>
 </body>
 </html>
