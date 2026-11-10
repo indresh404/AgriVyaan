@@ -13,6 +13,7 @@ import 'field_storage_service.dart';
 /// - fieldid (UUID FK fields)
 /// - field_name (TEXT)
 /// - booking_datetime (TIMESTAMP)
+/// - created_at (TIMESTAMPTZ)
 /// - status (TEXT, default 'Pending')
 class BookingService {
   SupabaseClient get _supabase => Supabase.instance.client;
@@ -59,6 +60,7 @@ class BookingService {
   }) async {
     final formattedDate = DateFormat('yyyy-MM-dd').format(bookingDatetime);
     final formattedTime = DateFormat('hh:mm a').format(bookingDatetime);
+    final createdAt = DateTime.now().toUtc();
 
     var scan = DroneScan(
       id: const Uuid().v4(),
@@ -66,6 +68,7 @@ class BookingService {
       fieldId: fieldId,
       fieldName: fieldName,
       bookingDatetime: bookingDatetime,
+      createdAt: createdAt,
       scanType: scanType,
       date: formattedDate,
       time: formattedTime,
@@ -81,6 +84,7 @@ class BookingService {
       'fieldid': fieldId,
       'field_name': fieldName,
       'booking_datetime': bookingDatetime.toIso8601String(),
+      'created_at': createdAt.toIso8601String(),
       'status': status,
     };
 
@@ -94,6 +98,10 @@ class BookingService {
 
       if (saved['booking_id'] != null) {
         scan = scan.copyWith(id: saved['booking_id'].toString());
+      }
+      final savedCreatedAt = DateTime.tryParse(saved['created_at']?.toString() ?? '');
+      if (savedCreatedAt != null) {
+        scan = scan.copyWith(createdAt: savedCreatedAt);
       }
       debugPrint('Booking created in Supabase successfully! ID: ${scan.id}');
     } catch (e) {
@@ -132,6 +140,37 @@ class BookingService {
     }
   }
 
+  Future<bool> cancelBooking(DroneScan scan, String fid) async {
+    if (!scan.canCancelAt(DateTime.now())) return false;
+
+    if (FieldStorageService.isUuid(fid)) {
+      try {
+        final updated = await _supabase
+            .from('bookings')
+            .update({'status': 'Cancelled'})
+            .eq('booking_id', scan.id)
+            .eq('fid', fid)
+            .select('booking_id')
+            .maybeSingle();
+        if (updated == null) return false;
+      } catch (e) {
+        debugPrint('Error cancelling booking ${scan.id} in Supabase: $e');
+        return false;
+      }
+    }
+
+    final cancelledScan = scan.copyWith(status: DroneScanStatus.cancelled);
+    final local = await _loadLocalBookings(fid);
+    final index = local.indexWhere((booking) => booking.id == scan.id);
+    if (index == -1) {
+      local.insert(0, cancelledScan);
+    } else {
+      local[index] = cancelledScan;
+    }
+    await _cacheBookingsLocally(fid, local);
+    return true;
+  }
+
   // --- Local Cache Helpers ---
   Future<void> _cacheBookingsLocally(String? fid, List<DroneScan> bookings) async {
     try {
@@ -157,7 +196,9 @@ class BookingService {
 
   static DroneScanStatus _statusFromString(String statusStr) {
     final lower = statusStr.toLowerCase();
-    if (lower.contains('pend') || lower.contains('request')) {
+    if (lower.contains('cancel')) {
+      return DroneScanStatus.cancelled;
+    } else if (lower.contains('pend') || lower.contains('request')) {
       return DroneScanStatus.requested;
     } else if (lower.contains('sched') || lower.contains('confirm')) {
       return DroneScanStatus.scheduled;
@@ -195,6 +236,8 @@ class BookingService {
         return 'Under Review';
       case DroneScanStatus.reportReady:
         return 'Completed';
+      case DroneScanStatus.cancelled:
+        return 'Cancelled';
     }
   }
 
@@ -205,6 +248,7 @@ class BookingService {
     final fieldName = json['field_name']?.toString();
     final statusStr = (json['status'] ?? 'Pending').toString();
     final status = _statusFromString(statusStr);
+    final createdAt = DateTime.tryParse(json['created_at']?.toString() ?? '');
 
     DateTime? dt;
     final dtVal = json['booking_datetime'] ?? json['date'];
@@ -228,6 +272,7 @@ class BookingService {
       fieldId: fieldId,
       fieldName: fieldName,
       bookingDatetime: dt,
+      createdAt: createdAt,
       scanType: (json['scan_type'] ?? 'Crop Health Scan').toString(),
       date: dateStr,
       time: timeStr,
@@ -245,6 +290,7 @@ class BookingService {
         'fieldid': scan.fieldId,
         'field_name': scan.fieldName,
         'booking_datetime': scan.bookingDatetime?.toIso8601String() ?? scan.date,
+        'created_at': scan.createdAt?.toIso8601String(),
         'scan_type': scan.scanType,
         'date': scan.date,
         'time': scan.time,

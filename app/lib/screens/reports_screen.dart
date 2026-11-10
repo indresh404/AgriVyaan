@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter/foundation.dart';
 import 'dart:io';
 import 'package:path_provider/path_provider.dart';
@@ -19,6 +20,9 @@ class ReportsScreen extends StatefulWidget {
 }
 
 class _ReportsScreenState extends State<ReportsScreen> {
+  static const MethodChannel _downloadsChannel =
+      MethodChannel('com.example.app/downloads');
+
   CropField? _selectedField;
   final FieldStorageService _storageService = FieldStorageService();
   List<FarmField> _localFields = [];
@@ -1115,8 +1119,8 @@ class _ReportsScreenState extends State<ReportsScreen> {
       final alertText = hasAlerts
           ? activeAlertsList.join('. ')
           : 'No critical problems found. Field crop health remains stable.';
-
-
+      final soilHealthCard =
+          AppStateProvider.of(context).getCurrentCardForField(field.id);
 
       pdf.addPage(
         pw.MultiPage(
@@ -1160,6 +1164,65 @@ class _ReportsScreenState extends State<ReportsScreen> {
                   ),
                 ],
               ),
+              pw.SizedBox(height: 16),
+
+              pw.Text(
+                'SOIL HEALTH CARD LAB RESULTS',
+                style: pw.TextStyle(
+                  fontSize: 11,
+                  fontWeight: pw.FontWeight.bold,
+                  color: PdfColors.green800,
+                ),
+              ),
+              pw.SizedBox(height: 6),
+              if (soilHealthCard == null || soilHealthCard.nutrients.isEmpty)
+                pw.Text(
+                  'No Soil Health Card values have been saved for this field.',
+                  style: const pw.TextStyle(fontSize: 9, color: PdfColors.grey700),
+                )
+              else
+                pw.Table(
+                  border: pw.TableBorder.all(color: PdfColors.grey300),
+                  children: [
+                    pw.TableRow(
+                      decoration: const pw.BoxDecoration(color: PdfColors.green50),
+                      children: [
+                        for (final label in ['Parameter', 'Result', 'Unit'])
+                          pw.Padding(
+                            padding: const pw.EdgeInsets.all(6),
+                            child: pw.Text(
+                              label,
+                              style: pw.TextStyle(
+                                fontSize: 9,
+                                fontWeight: pw.FontWeight.bold,
+                              ),
+                            ),
+                          ),
+                      ],
+                    ),
+                    ...soilHealthCard.nutrients.map((reading) {
+                      return pw.TableRow(
+                        children: [
+                          pw.Padding(
+                            padding: const pw.EdgeInsets.all(6),
+                            child: pw.Text(reading.name,
+                                style: const pw.TextStyle(fontSize: 9)),
+                          ),
+                          pw.Padding(
+                            padding: const pw.EdgeInsets.all(6),
+                            child: pw.Text(reading.value.toString(),
+                                style: const pw.TextStyle(fontSize: 9)),
+                          ),
+                          pw.Padding(
+                            padding: const pw.EdgeInsets.all(6),
+                            child: pw.Text(reading.unit,
+                                style: const pw.TextStyle(fontSize: 9)),
+                          ),
+                        ],
+                      );
+                    }),
+                  ],
+                ),
               pw.SizedBox(height: 16),
 
               pw.Row(
@@ -1512,24 +1575,20 @@ class _ReportsScreenState extends State<ReportsScreen> {
       String filePath = '';
       File? file;
       bool savedDirectly = false;
+      bool savedToDownloads = false;
 
       try {
         if (Platform.isAndroid) {
-          // Use app-accessible external storage (no permission needed on Android 10+)
-          final extDir = await getExternalStorageDirectory();
-          if (extDir != null) {
-            filePath = '${extDir.path}/agrivyaan_report_${field.name.replaceAll(' ', '_')}.pdf';
-            file = File(filePath);
-            await file.writeAsBytes(pdfBytes);
-            savedDirectly = true;
-          } else {
-            // Final fallback: app documents directory
-            final appDocs = await getApplicationDocumentsDirectory();
-            filePath = '${appDocs.path}/agrivyaan_report_${field.name.replaceAll(' ', '_')}.pdf';
-            file = File(filePath);
-            await file.writeAsBytes(pdfBytes);
-            savedDirectly = true;
-          }
+          final safeFieldName =
+              field.name.replaceAll(RegExp(r'[^A-Za-z0-9_-]'), '_');
+          final fileName = 'agrivyaan_report_$safeFieldName.pdf';
+          await _downloadsChannel.invokeMethod<String>('savePdfToDownloads', {
+            'fileName': fileName,
+            'bytes': pdfBytes,
+          });
+          filePath = fileName;
+          savedDirectly = true;
+          savedToDownloads = true;
         } else if (Platform.isWindows) {
           final home = Platform.environment['USERPROFILE'];
           final winDownload = Directory('$home\\Downloads');
@@ -1575,9 +1634,11 @@ class _ReportsScreenState extends State<ReportsScreen> {
                   crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(
-                    savedDirectly
+                    savedToDownloads
                         ? 'The PDF report was successfully saved to your downloads folder as:\n'
-                        : 'PDF Report successfully generated!\n',
+                        : savedDirectly
+                            ? 'The PDF report was saved on this device as:\n'
+                            : 'PDF Report successfully generated!\n',
                     style: const TextStyle(fontSize: 13),
                   ),
                   if (savedDirectly) ...[
@@ -1591,7 +1652,7 @@ class _ReportsScreenState extends State<ReportsScreen> {
                       ),
                       width: double.infinity,
                       child: Text(
-                        file?.path.split('/').last ?? 'agrivyaan_report.pdf',
+                        file?.path.split('/').last ?? filePath.split('/').last,
                         style: const TextStyle(
                           fontFamily: 'monospace',
                           fontSize: 10,
@@ -1602,7 +1663,7 @@ class _ReportsScreenState extends State<ReportsScreen> {
                     ),
                     const SizedBox(height: 12),
                     const Text(
-                      'Would you also like to share or save it via your phone\'s system menu?',
+                      'The report is saved locally. You can also share a copy.',
                       style: TextStyle(fontSize: 13),
                     ),
                   ] else ...[
@@ -1622,7 +1683,7 @@ class _ReportsScreenState extends State<ReportsScreen> {
               ),
               ElevatedButton.icon(
                 icon: const Icon(Icons.share, color: Colors.white, size: 16),
-                label: const Text('Save / Share PDF', style: TextStyle(color: Colors.white)),
+                label: const Text('Share PDF', style: TextStyle(color: Colors.white)),
                 style: ElevatedButton.styleFrom(backgroundColor: Colors.green),
                 onPressed: () async {
                   Navigator.pop(context);

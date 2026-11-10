@@ -10,6 +10,8 @@ import 'chat_screen.dart';
 import 'library_screen.dart';
 import 'scans_screen.dart';
 import '../widgets/home_ai_chatbot.dart';
+import 'soil_health_card_screen.dart';
+import 'soil_health_card_upload_screen.dart';
 
 class HomeScreen extends StatefulWidget {
   final Function(int) onTabSelected;
@@ -484,6 +486,9 @@ class _HomeScreenState extends State<HomeScreen> {
             ),
             const SizedBox(height: 20),
 
+            _buildSoilHealthCardsSection(appState),
+            const SizedBox(height: 20),
+
             // --- CROP LIBRARY CARD BUTTON ---
             Text(
               appState.translate('crop_library'),
@@ -729,6 +734,11 @@ class _HomeScreenState extends State<HomeScreen> {
         statusColor = Colors.green.shade800;
         statusText = 'AI Report Ready';
         currentProgressIndex = 4;
+        break;
+      case DroneScanStatus.cancelled:
+        statusColor = Colors.red.shade700;
+        statusText = 'Booking Cancelled';
+        currentProgressIndex = 1;
         break;
     }
 
@@ -1043,6 +1053,66 @@ class _HomeScreenState extends State<HomeScreen> {
           ),
         ),
       ),
+    );
+  }
+
+  Widget _buildSoilHealthCardsSection(AppState appState) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const Text(
+          'Soil Health Cards',
+          style: TextStyle(
+            fontWeight: FontWeight.bold,
+            fontSize: 16,
+            color: Colors.black87,
+          ),
+        ),
+        const SizedBox(height: 10),
+        Card(
+          elevation: 0,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(16),
+            side: BorderSide(color: Colors.green.shade100),
+          ),
+          child: appState.fields.isEmpty
+              ? const Padding(
+                  padding: EdgeInsets.all(16),
+                  child: Text('Add a field to manage its Soil Health Card.'),
+                )
+              : Column(
+                  children: appState.fields.map((field) {
+                    final hasCard = appState.getCardsForField(field.id).isNotEmpty;
+                    return ListTile(
+                      leading: CircleAvatar(
+                        backgroundColor: Colors.green.shade50,
+                        child: Icon(
+                          Icons.eco_outlined,
+                          color: Colors.green.shade700,
+                        ),
+                      ),
+                      title: Text(field.name, maxLines: 1, overflow: TextOverflow.ellipsis),
+                      subtitle: Text(hasCard ? 'View soil report' : 'Add soil report'),
+                      trailing: Icon(
+                        hasCard ? Icons.chevron_right : Icons.add_circle_outline,
+                        color: Colors.green.shade700,
+                      ),
+                      onTap: () => widget.onPushScreen(
+                        hasCard
+                            ? SoilHealthCardScreen(
+                                fieldId: field.id,
+                                fieldName: field.name,
+                              )
+                            : SoilHealthCardUploadScreen(
+                                fieldId: field.id,
+                                fieldName: field.name,
+                              ),
+                      ),
+                    );
+                  }).toList(),
+                ),
+        ),
+      ],
     );
   }
 
