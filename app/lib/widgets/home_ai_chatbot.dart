@@ -57,7 +57,7 @@ class _HomeAiChatbotState extends State<HomeAiChatbot> {
         appState.addChatMessage({
           'id': 'welcome_msg',
           'isUser': false,
-          'text': 'Welcome to Agrivyaan! I am your AI Farming Assistant powered by Sarvam AI. Ask me anything about farming, or say "how to use" to learn about app features. You can speak in Hindi, Marathi, Gujarati, Punjabi, Kannada, or Telugu!',
+          'text': 'Welcome to Agrivyaan! I am your AI Farming Assistant. Ask me anything about farming, or say "how to use" to learn about app features. You can speak in Hindi, Marathi, Gujarati, Punjabi, Kannada, or Telugu!',
           'timestamp': DateTime.now().toIso8601String(),
         });
       }
@@ -107,7 +107,7 @@ class _HomeAiChatbotState extends State<HomeAiChatbot> {
         children: [
           // Header Bar
           Container(
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 12),
             decoration: BoxDecoration(
               gradient: LinearGradient(
                 colors: [AppTheme.primaryGreen, Colors.green.shade700],
@@ -133,30 +133,16 @@ class _HomeAiChatbotState extends State<HomeAiChatbot> {
                     children: [
                       Row(
                         children: [
-                          Text(
+                          Expanded(child: Text(
                             appState.translate('ai_assistant'),
                             style: const TextStyle(
                               color: Colors.white,
                               fontWeight: FontWeight.bold,
                               fontSize: 16,
                             ),
-                          ),
-                          const SizedBox(width: 6),
-                          Container(
-                            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                            decoration: BoxDecoration(
-                              color: Colors.amber.shade400,
-                              borderRadius: BorderRadius.circular(8),
-                            ),
-                            child: const Text(
-                              'Sarvam AI',
-                              style: TextStyle(
-                                color: Colors.black,
-                                fontSize: 9,
-                                fontWeight: FontWeight.bold,
-                              ),
-                            ),
-                          )
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          )),
                         ],
                       ),
                       Text(
@@ -333,7 +319,7 @@ class _HomeAiChatbotState extends State<HomeAiChatbot> {
                   ),
                   const SizedBox(width: 8),
                   Text(
-                    'Sarvam AI is thinking...',
+                    'Preparing your answer...',
                     style: TextStyle(fontSize: 11, fontStyle: FontStyle.italic, color: Colors.grey.shade600),
                   ),
                 ],
@@ -478,6 +464,7 @@ class _HomeAiChatbotState extends State<HomeAiChatbot> {
   }
 
   void _sendMessage(String query, AppState appState) async {
+    if (_isLoadingAi || query.trim().isEmpty) return;
     final msgId = DateTime.now().millisecondsSinceEpoch.toString();
     
     appState.addChatMessage({
@@ -493,32 +480,40 @@ class _HomeAiChatbotState extends State<HomeAiChatbot> {
     });
     _scrollToBottom();
 
-    // Call Sarvam AI Service for farm response
-    final aiResponse = await _sarvamService.generateFarmerResponse(
-      query: query,
-      languageCode: appState.currentLanguage,
-      profile: appState.currentProfile,
-      fields: appState.fields,
-      chatHistory: appState.chatHistory,
-    );
+    String response;
+    var shouldPlayAudio = false;
+    try {
+      response = await _sarvamService.generateFarmerResponse(
+        query: query,
+        languageCode: appState.currentLanguage,
+        profile: appState.currentProfile,
+        fields: appState.fields,
+        chatHistory: appState.chatHistory,
+      );
+      shouldPlayAudio = true;
+    } catch (error, stackTrace) {
+      debugPrint('Chatbot response error: $error\n$stackTrace');
+      response = 'Sorry, I couldn’t prepare a response right now. Please try again.';
+    } finally {
+      if (mounted) {
+        setState(() => _isLoadingAi = false);
+      }
+    }
 
-    if (mounted) {
-      final botMsgId = 'bot_$msgId';
-      
-      appState.addChatMessage({
-        'id': botMsgId,
-        'isUser': false,
-        'text': aiResponse,
-        'timestamp': DateTime.now().toIso8601String(),
-      });
+    if (!mounted) return;
 
-      setState(() {
-        _isLoadingAi = false;
-      });
-      _scrollToBottom();
+    final botMsgId = 'bot_$msgId';
+    appState.addChatMessage({
+      'id': botMsgId,
+      'isUser': false,
+      'text': response,
+      'timestamp': DateTime.now().toIso8601String(),
+    });
+    _scrollToBottom();
 
-      // Auto play Sarvam TTS for spoken response in farmer language
-      _toggleTtsAudio(aiResponse, botMsgId, appState.currentLanguage);
+    // Only play generated responses. Error messages should stay quiet.
+    if (shouldPlayAudio) {
+      _toggleTtsAudio(response, botMsgId, appState.currentLanguage);
     }
   }
 

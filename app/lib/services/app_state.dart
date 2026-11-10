@@ -513,12 +513,10 @@ class AppState extends ChangeNotifier {
   }
 
   Future<void> addSoilHealthCard(String fieldId, SoilHealthCard card, {String? localFilePath}) async {
-    final fidToUse = currentFid;
     await _shcStorageService.addCard(
       _soilHealthCards,
       fieldId,
       card,
-      fid: fidToUse,
       localFilePath: localFilePath,
     );
 
@@ -709,6 +707,34 @@ class AppState extends ChangeNotifier {
       isCritical: false,
     );
     notifyListeners();
+  }
+
+  Future<bool> cancelDroneScan(String scanId) async {
+    final idx = _scans.indexWhere((scan) => scan.id == scanId);
+    if (idx == -1) return false;
+
+    final scan = _scans[idx];
+    if (!scan.canCancelAt(DateTime.now())) return false;
+
+    final fid = scan.fid ?? currentFid ?? 'demo_farmer_id';
+    final cancelled = await _bookingService.cancelBooking(scan, fid);
+    if (!cancelled) return false;
+
+    final currentIdx = _scans.indexWhere((item) => item.id == scanId);
+    if (currentIdx == -1 || !_scans[currentIdx].canCancelAt(DateTime.now())) {
+      return false;
+    }
+
+    _scans[currentIdx] = _scans[currentIdx].copyWith(
+      status: DroneScanStatus.cancelled,
+    );
+    _addNotification(
+      title: 'Drone Booking Cancelled',
+      description: 'Your ${scan.scanType} booking for ${scan.fieldName ?? 'your field'} has been cancelled.',
+      isCritical: false,
+    );
+    notifyListeners();
+    return true;
   }
 
   // Operator Actions

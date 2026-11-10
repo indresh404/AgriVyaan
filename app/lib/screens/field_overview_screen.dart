@@ -1,7 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import '../models/farm_field.dart';
-import '../models/soil_health_card.dart';
 import '../services/app_state.dart';
 import '../services/field_storage_service.dart';
 import '../utils/app_theme.dart';
@@ -15,8 +14,6 @@ import '../widgets/field_zone_map.dart';
 import 'add_field_screen.dart';
 import 'zone_details_screen.dart';
 import '../widgets/custom_widgets.dart';
-import 'soil_health_card_screen.dart';
-import 'soil_health_card_upload_screen.dart';
 
 /// Comprehensive single-field view with health, sensors, zones, problems, and improvements.
 class FieldOverviewScreen extends StatefulWidget {
@@ -124,10 +121,6 @@ class _FieldOverviewScreenState extends State<FieldOverviewScreen> {
         // Field info summary
         _buildFieldInfo(),
         const SizedBox(height: 16),
-
-        // Soil Health Card entry point
-        _buildSoilHealthCardEntry(),
-        const SizedBox(height: 20),
 
         // Health score
         _buildSectionTitle('Crop Health Status', Icons.favorite_rounded),
@@ -404,194 +397,6 @@ class _FieldOverviewScreenState extends State<FieldOverviewScreen> {
 
   Widget _infoDivider() {
     return const Divider(height: 16, color: AppTheme.border);
-  }
-
-  Widget _buildSoilHealthCardEntry() {
-    final appState = AppStateProvider.of(context);
-    final currentCard = appState.getCurrentCardForField(_field.id);
-
-    if (currentCard != null) {
-      // Show mini summary card
-      return GestureDetector(
-        onTap: () => _openSoilHealthCard(),
-        child: Container(
-          padding: const EdgeInsets.all(14),
-          decoration: BoxDecoration(
-            gradient: LinearGradient(
-              colors: [
-                AppTheme.primaryGreen.withValues(alpha: 0.05),
-                AppTheme.primaryGreenSurface,
-              ],
-              begin: Alignment.topLeft,
-              end: Alignment.bottomRight,
-            ),
-            borderRadius: BorderRadius.circular(14),
-            border: Border.all(
-              color: AppTheme.primaryGreen.withValues(alpha: 0.2),
-              width: 0.5,
-            ),
-          ),
-          child: Row(
-            children: [
-              Container(
-                padding: const EdgeInsets.all(8),
-                decoration: BoxDecoration(
-                  color: AppTheme.primaryGreen.withValues(alpha: 0.1),
-                  borderRadius: BorderRadius.circular(10),
-                ),
-                child: const Icon(Icons.eco_rounded,
-                    color: AppTheme.primaryGreen, size: 22),
-              ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Row(
-                      children: [
-                        const Text(
-                          'Soil Health Card',
-                          style: TextStyle(
-                            fontSize: 14,
-                            fontWeight: FontWeight.w700,
-                            color: AppTheme.textPrimary,
-                          ),
-                        ),
-                        if (currentCard.isVerified) ...[
-                          const SizedBox(width: 6),
-                          const Icon(Icons.verified_rounded,
-                              size: 14, color: AppTheme.primaryGreen),
-                        ],
-                      ],
-                    ),
-                    const SizedBox(height: 4),
-                    _buildNutrientMiniSummary(currentCard),
-                  ],
-                ),
-              ),
-              const Icon(Icons.chevron_right_rounded,
-                  color: AppTheme.textLight, size: 20),
-            ],
-          ),
-        ),
-      );
-    }
-
-    // Empty state: no SHC
-    return GestureDetector(
-      onTap: () => _openSoilHealthCardUpload(),
-      child: Container(
-        padding: const EdgeInsets.all(14),
-        decoration: BoxDecoration(
-          color: Colors.white,
-          borderRadius: BorderRadius.circular(14),
-          border: Border.all(color: AppTheme.border, width: 0.5),
-        ),
-        child: Row(
-          children: [
-            Container(
-              padding: const EdgeInsets.all(8),
-              decoration: BoxDecoration(
-                color: Colors.grey.shade100,
-                borderRadius: BorderRadius.circular(10),
-              ),
-              child: Icon(Icons.eco_outlined,
-                  color: Colors.grey.shade400, size: 22),
-            ),
-            const SizedBox(width: 12),
-            const Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    'Soil Health Card',
-                    style: TextStyle(
-                      fontSize: 14,
-                      fontWeight: FontWeight.w600,
-                      color: AppTheme.textPrimary,
-                    ),
-                  ),
-                  SizedBox(height: 2),
-                  Text(
-                    'Add soil report for this field',
-                    style: TextStyle(
-                      fontSize: 12,
-                      color: AppTheme.textSecondary,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-            Container(
-              padding: const EdgeInsets.symmetric(
-                  horizontal: 10, vertical: 6),
-              decoration: BoxDecoration(
-                color: AppTheme.primaryGreenSurface,
-                borderRadius: BorderRadius.circular(8),
-              ),
-              child: const Text(
-                'Add',
-                style: TextStyle(
-                  fontSize: 12,
-                  fontWeight: FontWeight.w600,
-                  color: AppTheme.primaryGreen,
-                ),
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _buildNutrientMiniSummary(SoilHealthCard card) {
-    final ph = card.getNutrient('pH');
-    final n = card.getNutrient('Available Nitrogen (N)');
-    final p = card.getNutrient('Available Phosphorus (P)');
-    final k = card.getNutrient('Available Potassium (K)');
-
-    final items = <String>[];
-    if (ph != null) items.add('pH ${ph.value}');
-    if (n != null) items.add('N ${n.value.round()}');
-    if (p != null) items.add('P ${p.value.round()}');
-    if (k != null) items.add('K ${k.value.round()}');
-
-    if (items.isEmpty) return const SizedBox.shrink();
-
-    return Text(
-      items.join(' · '),
-      style: const TextStyle(
-        fontSize: 12,
-        color: AppTheme.textSecondary,
-        fontWeight: FontWeight.w500,
-      ),
-    );
-  }
-
-  void _openSoilHealthCard() async {
-    await Navigator.push(
-      context,
-      MaterialPageRoute(
-        builder: (_) => SoilHealthCardScreen(
-          fieldId: _field.id,
-          fieldName: _field.name,
-        ),
-      ),
-    );
-    if (mounted) setState(() {});
-  }
-
-  void _openSoilHealthCardUpload() async {
-    await Navigator.push(
-      context,
-      MaterialPageRoute(
-        builder: (_) => SoilHealthCardUploadScreen(
-          fieldId: _field.id,
-          fieldName: _field.name,
-        ),
-      ),
-    );
-    if (mounted) setState(() {});
   }
 
   Widget _buildSectionTitle(String title, IconData icon) {

@@ -73,12 +73,14 @@ CREATE TABLE IF NOT EXISTS bookings (
     fieldid UUID NOT NULL,
     field_name TEXT,
     booking_datetime TIMESTAMP WITHOUT TIME ZONE NOT NULL,
+    created_at TIMESTAMPTZ,
     status TEXT NOT NULL DEFAULT 'Pending',
     CONSTRAINT bookings_pkey PRIMARY KEY (booking_id),
     CONSTRAINT bookings_fid_fkey FOREIGN KEY (fid) REFERENCES users (fid) ON DELETE CASCADE,
     CONSTRAINT bookings_fieldid_fkey FOREIGN KEY (fieldid) REFERENCES fields (fieldid) ON DELETE CASCADE
 );
 
+ALTER TABLE bookings ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ;
 ALTER TABLE bookings ENABLE ROW LEVEL SECURITY;
 
 DROP POLICY IF EXISTS "Farmers can access own bookings" ON bookings;

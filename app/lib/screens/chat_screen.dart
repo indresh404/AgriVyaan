@@ -19,9 +19,13 @@ class ChatScreen extends StatelessWidget {
           children: [
             const Icon(Icons.psychology, color: AppTheme.primaryGreen),
             const SizedBox(width: 8),
-            Text(
-              appState.translate('ai_assistant'),
-              style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.black87),
+            Expanded(
+              child: Text(
+                appState.translate('ai_assistant'),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.black87),
+              ),
             ),
           ],
         ),

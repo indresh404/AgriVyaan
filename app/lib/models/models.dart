@@ -161,6 +161,7 @@ enum DroneScanStatus {
   aiAnalysis,
   verification,
   reportReady,
+  cancelled,
 }
 
 extension DroneScanStatusExtension on DroneScanStatus {
@@ -182,6 +183,8 @@ extension DroneScanStatusExtension on DroneScanStatus {
         return 'VERIFICATION';
       case DroneScanStatus.reportReady:
         return 'REPORT READY';
+      case DroneScanStatus.cancelled:
+        return 'CANCELLED';
     }
   }
 }
@@ -192,6 +195,7 @@ class DroneScan {
   final String fieldId;
   final String? fieldName;
   final DateTime? bookingDatetime;
+  final DateTime? createdAt;
   final String scanType; // Crop Health Scan, Moisture/Soil Scan, Full Field Analysis
   final String date;
   final String time;
@@ -207,6 +211,7 @@ class DroneScan {
     required this.fieldId,
     this.fieldName,
     this.bookingDatetime,
+    this.createdAt,
     required this.scanType,
     required this.date,
     required this.time,
@@ -223,6 +228,7 @@ class DroneScan {
     String? fieldId,
     String? fieldName,
     DateTime? bookingDatetime,
+    DateTime? createdAt,
     String? scanType,
     String? date,
     String? time,
@@ -238,6 +244,7 @@ class DroneScan {
       fieldId: fieldId ?? this.fieldId,
       fieldName: fieldName ?? this.fieldName,
       bookingDatetime: bookingDatetime ?? this.bookingDatetime,
+      createdAt: createdAt ?? this.createdAt,
       scanType: scanType ?? this.scanType,
       date: date ?? this.date,
       time: time ?? this.time,
@@ -247,6 +254,19 @@ class DroneScan {
       healthScore: healthScore ?? this.healthScore,
       aiReportData: aiReportData ?? this.aiReportData,
     );
+  }
+
+  bool canCancelAt(DateTime now) {
+    final bookedAt = createdAt;
+    if (bookedAt == null ||
+        (status != DroneScanStatus.requested &&
+            status != DroneScanStatus.scheduled &&
+            status != DroneScanStatus.droneAssigned)) {
+      return false;
+    }
+
+    final elapsed = now.toUtc().difference(bookedAt.toUtc());
+    return !elapsed.isNegative && elapsed < const Duration(hours: 8);
   }
 }
 

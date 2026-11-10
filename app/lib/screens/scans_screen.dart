@@ -818,6 +818,32 @@ class _ScansScreenState extends State<ScansScreen> {
                                   ),
                                 ),
                               ),
+                              if (scan.status != DroneScanStatus.cancelled) ...[
+                                const SizedBox(height: 4),
+                                SizedBox(
+                                  width: double.infinity,
+                                  child: TextButton.icon(
+                                    onPressed: scan.canCancelAt(DateTime.now())
+                                        ? () => _confirmCancellation(context, appState, scan)
+                                        : null,
+                                    icon: const Icon(Icons.cancel_outlined, size: 16),
+                                    label: Text(
+                                      scan.createdAt != null &&
+                                              (scan.status == DroneScanStatus.requested ||
+                                                  scan.status == DroneScanStatus.scheduled ||
+                                                  scan.status == DroneScanStatus.droneAssigned)
+                                          ? 'Cancel Booking (available for 8 hours)'
+                                          : 'Cancellation unavailable',
+                                      style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13),
+                                    ),
+                                    style: TextButton.styleFrom(
+                                      foregroundColor: Colors.red.shade700,
+                                      disabledForegroundColor: Colors.grey.shade500,
+                                      padding: const EdgeInsets.symmetric(vertical: 10),
+                                    ),
+                                  ),
+                                ),
+                              ],
 
                               if (scan.status == DroneScanStatus.aiAnalysis && appState.currentRole == 'ADMIN') ...[
                                 const Divider(height: 24),
@@ -885,6 +911,10 @@ class _ScansScreenState extends State<ScansScreen> {
         bg = Colors.green.shade50;
         fg = Colors.green.shade800;
         break;
+      case DroneScanStatus.cancelled:
+        bg = Colors.red.shade50;
+        fg = Colors.red.shade800;
+        break;
     }
 
     return Container(
@@ -906,7 +936,9 @@ class _ScansScreenState extends State<ScansScreen> {
     ];
 
     final currentIndex = stages.indexOf(status);
-    final maxIndex = currentIndex == -1 ? 2 : currentIndex; // Fallback mapping
+    final maxIndex = status == DroneScanStatus.cancelled
+        ? -1
+        : (currentIndex == -1 ? 2 : currentIndex); // Fallback mapping
 
     return Row(
       children: List.generate(stages.length * 2 - 1, (index) {
@@ -937,5 +969,45 @@ class _ScansScreenState extends State<ScansScreen> {
 
   void _showRequestScanModal(BuildContext context, AppState appState) {
     ScansScreen.showRequestScanModal(context, appState);
+  }
+
+  Future<void> _confirmCancellation(
+    BuildContext context,
+    AppState appState,
+    DroneScan scan,
+  ) async {
+    final shouldCancel = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Cancel drone booking?'),
+        content: const Text(
+          'You can cancel a drone booking only within 8 hours of placing it.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, false),
+            child: const Text('Keep booking'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, true),
+            style: TextButton.styleFrom(foregroundColor: Colors.red),
+            child: const Text('Cancel booking'),
+          ),
+        ],
+      ),
+    );
+    if (shouldCancel != true || !context.mounted) return;
+
+    final cancelled = await appState.cancelDroneScan(scan.id);
+    if (!context.mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          cancelled
+              ? 'Drone booking cancelled.'
+              : 'Unable to cancel. The 8-hour window may have expired.',
+        ),
+      ),
+    );
   }
 }

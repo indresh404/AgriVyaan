@@ -1,12 +1,13 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:file_picker/file_picker.dart';
-import '../services/soil_health_card_demo_data.dart';
+import '../models/soil_health_card.dart';
+import '../services/app_state.dart';
+import '../services/soil_health_card_extraction_service.dart';
 import '../utils/app_theme.dart';
 import 'soil_health_card_review_screen.dart';
 
-/// Screen for uploading or importing a Soil Health Card document.
-/// Currently uses mock/demo OCR extraction. The architecture is ready
-/// for replacing mock extraction with real OCR when available.
+/// Screen for uploading a Soil Health Card PDF and reviewing extracted values.
 class SoilHealthCardUploadScreen extends StatefulWidget {
   final String fieldId;
   final String fieldName;
@@ -29,6 +30,11 @@ class _SoilHealthCardUploadScreenState
     with SingleTickerProviderStateMixin {
   _UploadState _state = _UploadState.initial;
   String? _selectedFileName;
+  String? _selectedFilePath;
+  String? _errorMessage;
+  Map<String, double?> _extractedValues = {};
+  final SoilHealthCardExtractionService _extractionService =
+      SoilHealthCardExtractionService();
   late AnimationController _pulseController;
 
   @override
@@ -131,7 +137,6 @@ class _SoilHealthCardUploadScreenState
         ),
         const SizedBox(height: 12),
 
-        // Upload Image
         _buildUploadOption(
           icon: Icons.image_outlined,
           title: 'Upload Image',
@@ -342,8 +347,10 @@ class _SoilHealthCardUploadScreenState
             ),
           ),
           const SizedBox(height: 20),
-          const Text(
-            'Information extracted successfully',
+          Text(
+            _extractedValues.values.any((value) => value != null)
+                ? 'Information extracted successfully'
+                : 'PDF opened; enter values below',
             style: TextStyle(
               fontSize: 16,
               fontWeight: FontWeight.w600,
@@ -351,8 +358,11 @@ class _SoilHealthCardUploadScreenState
             ),
           ),
           const SizedBox(height: 8),
-          const Text(
-            'Please review and verify the extracted data.',
+          Text(
+            _extractedValues.values.any((value) => value != null)
+                ? 'Please review and verify the extracted data.'
+                : 'No soil values were recognized. You can enter them manually in the review form.',
+            textAlign: TextAlign.center,
             style: TextStyle(
               fontSize: 13,
               color: AppTheme.textSecondary,
@@ -396,8 +406,9 @@ class _SoilHealthCardUploadScreenState
             ),
           ),
           const SizedBox(height: 8),
-          const Text(
-            'Please try again or select a different file.',
+          Text(
+            _errorMessage ?? 'Please try again or select a different file.',
+            textAlign: TextAlign.center,
             style: TextStyle(color: AppTheme.textSecondary),
           ),
           const SizedBox(height: 24),
@@ -411,7 +422,10 @@ class _SoilHealthCardUploadScreenState
   }
 
   Future<void> _pickFile(List<String> allowedExtensions) async {
-    setState(() => _state = _UploadState.picking);
+    setState(() {
+      _state = _UploadState.picking;
+      _errorMessage = null;
+    });
 
     try {
       final result = await FilePicker.platform.pickFiles(
@@ -427,14 +441,27 @@ class _SoilHealthCardUploadScreenState
       }
 
       _selectedFileName = result.files.first.name;
+      _selectedFilePath = result.files.first.path;
+      if (_selectedFilePath == null) {
+        throw const FormatException('Could not open the selected document.');
+      }
       setState(() => _state = _UploadState.processing);
 
-      // Simulate OCR processing time
-      // In a real implementation, this would call an OCR service
-      await Future.delayed(const Duration(seconds: 2));
-
+      final isPdf = allowedExtensions.contains('pdf');
+      _extractedValues = await _extractionService.extractValues(
+        _selectedFilePath!,
+        isPdf: isPdf,
+      );
       setState(() => _state = _UploadState.done);
     } catch (e) {
+      debugPrint('Soil Health Card OCR failed: $e');
+      _errorMessage = e is FormatException
+          ? e.message.toString()
+          : e is PlatformException && e.message != null
+              ? e.message!
+              : e is UnsupportedError
+                  ? e.message ?? 'This file type is not supported on this device.'
+              : e.toString();
       setState(() => _state = _UploadState.error);
     }
   }
@@ -455,15 +482,41 @@ class _SoilHealthCardUploadScreenState
   }
 
   void _navigateToReview() {
-    final cardId =
-        'shc_${DateTime.now().millisecondsSinceEpoch}';
-
-    // Generate demo/mock extraction result
-    // In a real implementation, this would come from OCR output
-    final extractedCard = SoilHealthCardDemoData.sampleExtractionResult(
+    const nutrientDefinitions = <(String, String, NutrientCategory)>[
+      ('pH', '', NutrientCategory.soilProperty),
+      ('EC', 'dS/m', NutrientCategory.soilProperty),
+      ('Organic Carbon', '%', NutrientCategory.soilProperty),
+      ('Nitrogen (N)', 'kg/ha', NutrientCategory.macronutrient),
+      ('Phosphorus (P)', 'kg/ha', NutrientCategory.macronutrient),
+      ('Potassium (K)', 'kg/ha', NutrientCategory.macronutrient),
+      ('Sulphur (S)', 'mg/kg', NutrientCategory.secondaryNutrient),
+      ('Magnesium (Mg)', 'mg/kg', NutrientCategory.secondaryNutrient),
+      ('Zinc (Zn)', 'mg/kg', NutrientCategory.micronutrient),
+      ('Iron (Fe)', 'mg/kg', NutrientCategory.micronutrient),
+      ('Copper (Cu)', 'mg/kg', NutrientCategory.micronutrient),
+      ('Boron (B)', 'mg/kg', NutrientCategory.micronutrient),
+    ];
+    final nutrients = nutrientDefinitions.map((definition) {
+      final (name, unit, category) = definition;
+      return SoilNutrientReading(
+        name: name,
+        value: _extractedValues[name] ?? 0,
+        unit: unit,
+        status: NutrientStatus.normal,
+        category: category,
+      );
+    }).toList();
+    final appState = AppStateProvider.of(context);
+    final extractedCard = SoilHealthCard(
+      id: 'shc_${DateTime.now().millisecondsSinceEpoch}',
       fieldId: widget.fieldId,
-      cardId: cardId,
+      farmerName: appState.currentProfile?.name,
+      location: appState.currentProfile?.location,
+      uploadDate: DateTime.now(),
+      nutrients: nutrients,
       sourceFileName: _selectedFileName,
+      isVerified: false,
+      isCurrent: false,
     );
 
     Navigator.pushReplacement(
@@ -472,6 +525,7 @@ class _SoilHealthCardUploadScreenState
         builder: (_) => SoilHealthCardReviewScreen(
           card: extractedCard,
           fieldName: widget.fieldName,
+          sourceFilePath: _selectedFilePath,
           isNewCard: true,
         ),
       ),

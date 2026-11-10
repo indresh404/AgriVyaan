@@ -80,10 +80,8 @@ class SoilHealthCardStorageService {
     Map<String, List<SoilHealthCard>> allCards,
     String fieldId,
     SoilHealthCard card, {
-    String? fid,
     String? localFilePath,
   }) async {
-    final currentFid = fid ?? _supabase.auth.currentUser?.id ?? 'demo_farmer_id';
     String? fileUrl;
 
     if (localFilePath != null && localFilePath.isNotEmpty) {
@@ -92,7 +90,15 @@ class SoilHealthCardStorageService {
 
     final cardWithUrl = fileUrl != null ? card.copyWith(sourceFileName: fileUrl) : card;
 
-    // Update local map
+    // Insert first so the UI only confirms after Supabase accepts the values.
+    final inserted = await _supabase
+        .from('soil_health')
+        .insert(_soilHealthCardToMap(cardWithUrl))
+        .select('shid')
+        .single();
+    final savedCard = cardWithUrl.copyWith(id: inserted['shid'].toString());
+
+    // Update local map after the database insert succeeds.
     final fieldCards = allCards[fieldId] ?? [];
     final updatedCards = fieldCards.map((c) {
       if (c.isCurrent) {
@@ -101,17 +107,8 @@ class SoilHealthCardStorageService {
       return c;
     }).toList();
 
-    updatedCards.insert(0, cardWithUrl.copyWith(isCurrent: true));
+    updatedCards.insert(0, savedCard.copyWith(isCurrent: true));
     allCards[fieldId] = updatedCards;
-
-    // Insert into Supabase
-    try {
-      final mapData = _soilHealthCardToMap(cardWithUrl);
-      await _supabase.from('soil_health').insert(mapData);
-      debugPrint('Soil Health Card record inserted into Supabase table.');
-    } catch (e) {
-      debugPrint('Error inserting Soil Health Card into Supabase: $e');
-    }
 
     await saveCards(allCards);
   }
@@ -185,28 +182,38 @@ class SoilHealthCardStorageService {
     final idStr = (json['shid'] ?? json['SHID'] ?? json['id'] ?? '').toString();
     final fieldIdStr = (json['fieldid'] ?? json['FIELDID'] ?? json['field_id'] ?? json['fieldId'] ?? '').toString();
 
-    // Extract key soil properties if columns exist
-    double phVal = (json['ph'] ?? json['pH'] as num?)?.toDouble() ?? 7.0;
-    double ecVal = (json['ec'] ?? json['EC'] as num?)?.toDouble() ?? 0.8;
-    double ocVal = (json['organic_carbon'] ?? json['Organic carbon'] as num?)?.toDouble() ?? 0.65;
-    double nVal = (json['nitrogen'] ?? json['Nitrogen'] as num?)?.toDouble() ?? 240.0;
-    double pVal = (json['phosphorus'] ?? json['Phosphorus'] as num?)?.toDouble() ?? 18.5;
-    double kVal = (json['potassium'] ?? json['Potassium'] as num?)?.toDouble() ?? 210.0;
+    double? numericValue(Object? value) {
+      if (value is num) return value.toDouble();
+      if (value is String) return double.tryParse(value);
+      return null;
+    }
 
-    List<SoilNutrientReading> nutrients = [];
-    final rawNutrients = json['nutrients_json'] ?? json['nutrients'];
-    if (rawNutrients is List) {
-      nutrients = rawNutrients.map((n) => SoilNutrientReading.fromJson(n as Map<String, dynamic>)).toList();
-    } else {
-      // Build nutrients from standard columns
-      nutrients = [
-        SoilNutrientReading(name: 'pH', value: phVal, unit: '', status: NutrientStatus.normal, category: NutrientCategory.soilProperty),
-        SoilNutrientReading(name: 'EC', value: ecVal, unit: 'dS/m', status: NutrientStatus.normal, category: NutrientCategory.soilProperty),
-        SoilNutrientReading(name: 'Organic Carbon', value: ocVal, unit: '%', status: NutrientStatus.medium, category: NutrientCategory.soilProperty),
-        SoilNutrientReading(name: 'Nitrogen (N)', value: nVal, unit: 'kg/ha', status: NutrientStatus.medium, category: NutrientCategory.macronutrient),
-        SoilNutrientReading(name: 'Phosphorus (P)', value: pVal, unit: 'kg/ha', status: NutrientStatus.low, category: NutrientCategory.macronutrient),
-        SoilNutrientReading(name: 'Potassium (K)', value: kVal, unit: 'kg/ha', status: NutrientStatus.normal, category: NutrientCategory.macronutrient),
-      ];
+    const nutrientColumns = <(String, String, String, String, NutrientCategory)>[
+      ('ph', 'pH', '', 'normal', NutrientCategory.soilProperty),
+      ('ec', 'EC', 'dS/m', 'normal', NutrientCategory.soilProperty),
+      ('organic_carbon', 'Organic Carbon', '%', 'medium', NutrientCategory.soilProperty),
+      ('nitrogen', 'Nitrogen (N)', 'kg/ha', 'medium', NutrientCategory.macronutrient),
+      ('phosphorus', 'Phosphorus (P)', 'kg/ha', 'normal', NutrientCategory.macronutrient),
+      ('potassium', 'Potassium (K)', 'kg/ha', 'normal', NutrientCategory.macronutrient),
+      ('sulphur', 'Sulphur (S)', 'mg/kg', 'normal', NutrientCategory.secondaryNutrient),
+      ('magnesium', 'Magnesium (Mg)', 'mg/kg', 'normal', NutrientCategory.secondaryNutrient),
+      ('zinc', 'Zinc (Zn)', 'mg/kg', 'normal', NutrientCategory.micronutrient),
+      ('iron', 'Iron (Fe)', 'mg/kg', 'normal', NutrientCategory.micronutrient),
+      ('copper', 'Copper (Cu)', 'mg/kg', 'normal', NutrientCategory.micronutrient),
+      ('boron', 'Boron (B)', 'mg/kg', 'normal', NutrientCategory.micronutrient),
+    ];
+    final nutrients = <SoilNutrientReading>[];
+    for (final definition in nutrientColumns) {
+      final (column, name, unit, status, category) = definition;
+      final value = numericValue(json[column]);
+      if (value == null) continue;
+      nutrients.add(SoilNutrientReading(
+        name: name,
+        value: value,
+        unit: unit,
+        status: NutrientStatus.fromJson(status),
+        category: category,
+      ));
     }
 
     return SoilHealthCard(
@@ -247,12 +254,12 @@ class SoilHealthCardStorageService {
 
     return {
       'fieldid': card.fieldId,
-      'ph': getNut('pH')?.value ?? 7.0,
-      'ec': getNut('EC')?.value ?? 0.8,
-      'organic_carbon': getNut('Organic Carbon')?.value ?? 0.65,
-      'nitrogen': getNut('Nitrogen')?.value ?? 240.0,
-      'phosphorus': getNut('Phosphorus')?.value ?? 18.5,
-      'potassium': getNut('Potassium')?.value ?? 210.0,
+      'ph': getNut('pH')?.value,
+      'ec': getNut('EC')?.value,
+      'organic_carbon': getNut('Organic Carbon')?.value,
+      'nitrogen': getNut('Nitrogen')?.value,
+      'phosphorus': getNut('Phosphorus')?.value,
+      'potassium': getNut('Potassium')?.value,
       'sulphur': getNut('Sulphur')?.value,
       'zinc': getNut('Zinc')?.value,
       'iron': getNut('Iron')?.value,

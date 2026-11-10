@@ -11,12 +11,14 @@ import '../utils/app_theme.dart';
 class SoilHealthCardReviewScreen extends StatefulWidget {
   final SoilHealthCard card;
   final String fieldName;
+  final String? sourceFilePath;
   final bool isNewCard;
 
   const SoilHealthCardReviewScreen({
     super.key,
     required this.card,
     required this.fieldName,
+    this.sourceFilePath,
     this.isNewCard = false,
   });
 
@@ -76,7 +78,7 @@ class _SoilHealthCardReviewScreenState
     _nutrientControllers = {};
     for (final nutrient in card.nutrients) {
       _nutrientControllers[nutrient.name] = TextEditingController(
-        text: nutrient.value.toString(),
+        text: nutrient.value == 0 ? '' : nutrient.value.toString(),
       );
     }
   }
@@ -196,7 +198,7 @@ class _SoilHealthCardReviewScreenState
                 SizedBox(
                   width: double.infinity,
                   child: ElevatedButton.icon(
-                    onPressed: _isSaving ? null : _saveAndVerify,
+                    onPressed: _isSaving ? null : _confirmAndSave,
                     icon: _isSaving
                         ? const SizedBox(
                             width: 18,
@@ -208,7 +210,7 @@ class _SoilHealthCardReviewScreenState
                           )
                         : const Icon(Icons.verified_outlined),
                     label: Text(
-                        _isSaving ? 'Saving...' : 'Save & Verify'),
+                        _isSaving ? 'Saving...' : 'Confirm & Save'),
                     style: ElevatedButton.styleFrom(
                       backgroundColor: AppTheme.primaryGreen,
                       foregroundColor: Colors.white,
@@ -372,6 +374,29 @@ class _SoilHealthCardReviewScreenState
     return widgets;
   }
 
+  Future<void> _confirmAndSave() async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Confirm soil test values'),
+        content: const Text(
+          'Have you checked the extracted values and corrected anything that was read incorrectly? Confirm to save this report.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, false),
+            child: const Text('Review again'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(dialogContext, true),
+            child: const Text('Yes, save'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed == true && mounted) await _saveAndVerify();
+  }
+
   Future<void> _saveAndVerify() async {
     setState(() => _isSaving = true);
 
@@ -389,11 +414,16 @@ class _SoilHealthCardReviewScreenState
       }
 
       // Build updated nutrients with edited values
-      final updatedNutrients = widget.card.nutrients.map((original) {
+      final updatedNutrients = widget.card.nutrients.where((original) {
+        return _nutrientControllers[original.name]?.text.trim().isNotEmpty ??
+            false;
+      }).map((original) {
         final controller = _nutrientControllers[original.name];
         if (controller == null) return original;
-        final newValue =
-            double.tryParse(controller.text.trim()) ?? original.value;
+        final newValue = double.tryParse(controller.text.trim());
+        if (newValue == null) {
+          throw FormatException('Enter a valid number for ${original.name}.');
+        }
         return original.copyWith(value: newValue);
       }).toList();
 
@@ -465,7 +495,10 @@ class _SoilHealthCardReviewScreenState
 
       if (widget.isNewCard) {
         await appState.addSoilHealthCard(
-            verifiedCard.fieldId, verifiedCard);
+          verifiedCard.fieldId,
+          verifiedCard,
+          localFilePath: widget.sourceFilePath,
+        );
       } else {
         await appState.updateSoilHealthCard(
             verifiedCard.fieldId, verifiedCard);
