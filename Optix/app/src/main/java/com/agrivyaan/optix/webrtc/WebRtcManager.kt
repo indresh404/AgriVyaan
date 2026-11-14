@@ -1,8 +1,7 @@
 package com.agrivyaan.optix.webrtc
 
 import android.content.Context
-import android.hardware.camera2.CameraCharacteristics
-import android.hardware.camera2.CameraManager
+import android.hardware.camera2.*
 import android.util.Log
 import com.agrivyaan.optix.camera.UsbCameraSource
 import kotlinx.coroutines.CoroutineScope
@@ -559,11 +558,17 @@ class WebRtcManager(
     private val hardwareScope = CoroutineScope(Dispatchers.IO)
     private var isStrobeActive = false
     private var strobeJob: Job? = null
+    private var isFlickerActive = false
+    private var flickerJob: Job? = null
 
     fun toggleTorch(): Boolean {
         isStrobeActive = false
         strobeJob?.cancel()
         strobeJob = null
+        isFlickerActive = false
+        flickerJob?.cancel()
+        flickerJob = null
+
         isTorchOn = !isTorchOn
         val target = isTorchOn
         hardwareScope.launch {
@@ -576,23 +581,29 @@ class WebRtcManager(
         isStrobeActive = !isStrobeActive
         strobeJob?.cancel()
         strobeJob = null
+        isFlickerActive = false
+        flickerJob?.cancel()
+        flickerJob = null
 
         if (isStrobeActive) {
             isTorchOn = false
             strobeJob = hardwareScope.launch {
                 Log.i(tag, "Airplane strobe light loop started")
-                while (isActive && isStrobeActive) {
-                    setTorchHardware(true)
-                    delay(100)
+                try {
+                    while (isActive && isStrobeActive) {
+                        setTorchHardware(true)
+                        delay(100)
+                        setTorchHardware(false)
+                        delay(120)
+                        setTorchHardware(true)
+                        delay(100)
+                        setTorchHardware(false)
+                        delay(700)
+                    }
+                } finally {
                     setTorchHardware(false)
-                    delay(120)
-                    setTorchHardware(true)
-                    delay(100)
-                    setTorchHardware(false)
-                    delay(700)
+                    Log.i(tag, "Airplane strobe light loop stopped")
                 }
-                setTorchHardware(false)
-                Log.i(tag, "Airplane strobe light loop stopped")
             }
             Log.i(tag, "Airplane strobe light ACTIVATED")
         } else {
@@ -604,14 +615,101 @@ class WebRtcManager(
         return isStrobeActive
     }
 
+    fun toggleFlicker(): Boolean {
+        isFlickerActive = !isFlickerActive
+        flickerJob?.cancel()
+        flickerJob = null
+        isStrobeActive = false
+        strobeJob?.cancel()
+        strobeJob = null
+
+        if (isFlickerActive) {
+            isTorchOn = false
+            flickerJob = hardwareScope.launch {
+                Log.i(tag, "Fast continuous flicker loop started")
+                try {
+                    while (isActive && isFlickerActive) {
+                        setTorchHardware(true)
+                        delay(60)
+                        setTorchHardware(false)
+                        delay(60)
+                    }
+                } finally {
+                    setTorchHardware(false)
+                    Log.i(tag, "Fast continuous flicker loop stopped")
+                }
+            }
+            Log.i(tag, "Fast continuous flicker ACTIVATED")
+        } else {
+            hardwareScope.launch {
+                setTorchHardware(false)
+            }
+            Log.i(tag, "Fast continuous flicker DEACTIVATED")
+        }
+        return isFlickerActive
+    }
+
+    fun setVideoTrackEnabled(enabled: Boolean) {
+        phoneVideoTrack?.setEnabled(enabled)
+        usbVideoTrack?.setEnabled(enabled)
+        Log.i(tag, "WebRTC Video tracks transmission set to: $enabled")
+    }
+
     private fun setTorchHardware(enabled: Boolean) {
+        // Method 1: If WebRTC capturer is running, control torch directly via active Camera2Session
+        val capturer = phoneCapturer
+        if (capturer != null) {
+            try {
+                val sessionField = findFieldRecursive(capturer.javaClass, "currentSession")
+                sessionField?.isAccessible = true
+                val session = sessionField?.get(capturer)
+                if (session != null) {
+                    val builderField = session.javaClass.getDeclaredField("captureRequestBuilder")
+                    builderField.isAccessible = true
+                    val builder = builderField.get(session) as? CaptureRequest.Builder
+
+                    val captureSessionField = session.javaClass.getDeclaredField("captureSession")
+                    captureSessionField.isAccessible = true
+                    val captureSession = captureSessionField.get(session) as? CameraCaptureSession
+
+                    if (builder != null && captureSession != null) {
+                        if (enabled) {
+                            builder.set(CaptureRequest.FLASH_MODE, CaptureRequest.FLASH_MODE_TORCH)
+                            builder.set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_ON)
+                        } else {
+                            builder.set(CaptureRequest.FLASH_MODE, CaptureRequest.FLASH_MODE_OFF)
+                        }
+                        captureSession.setRepeatingRequest(builder.build(), null, null)
+                        Log.d(tag, "Torch set via active Camera2Session: $enabled")
+                        return
+                    }
+                }
+            } catch (e: Exception) {
+                Log.d(tag, "Camera2Session reflection fallback: ${e.message}")
+            }
+        }
+
+        // Method 2: Fallback to CameraManager if session is not active
         try {
             val cameraManager = context.getSystemService(Context.CAMERA_SERVICE) as CameraManager
             val camId = rearCameraId ?: "0"
             cameraManager.setTorchMode(camId, enabled)
+            Log.d(tag, "Torch set via CameraManager: $enabled")
         } catch (e: Exception) {
-            Log.w(tag, "Torch hardware control ($enabled): ${e.message}")
+            Log.w(tag, "CameraManager torch fallback ($enabled): ${e.message}")
         }
+    }
+
+    private fun findFieldRecursive(clazz: Class<*>?, fieldName: String): java.lang.reflect.Field? {
+        var current = clazz
+        while (current != null) {
+            try {
+                return current.getDeclaredField(fieldName)
+            } catch (_: NoSuchFieldException) {
+                current = current.superclass
+            }
+        }
+        return null
     }
 
     fun switchCamera() {
@@ -704,6 +802,9 @@ class WebRtcManager(
 
     fun release() {
         strobeJob?.cancel()
+        flickerJob?.cancel()
+        isStrobeActive = false
+        isFlickerActive = false
         setTorchHardware(false)
         closeAllPeerConnections()
         try {

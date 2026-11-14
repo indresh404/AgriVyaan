@@ -530,12 +530,12 @@ export const AboutPage: React.FC<AboutPageProps> = ({ onBackToDashboard }) => {
             })}
           </nav>
 
-          {/* Right Action CTA: "Book a Scan" -> Redirects to GitHub Repository */}
+          {/* Right Action CTA: "Book a Scan" -> Redirects to operator workspace */}
           <div className="flex items-center gap-2.5">
             <button
               onClick={handleBookScanClick}
               className="flex items-center gap-2 px-5 py-2 rounded-full bg-[#1E2B1D] hover:bg-[#2F422D] text-white text-xs sm:text-sm font-extrabold transition-all shadow-md hover:shadow-lg hover:scale-102 active:scale-98 cursor-pointer"
-              title="Visit AgriVyaan on GitHub"
+              title="Go to operator workspace to book a scan"
             >
               <span>Book a Scan</span>
               <ArrowUpRight size={14} className="stroke-[2.5]" />

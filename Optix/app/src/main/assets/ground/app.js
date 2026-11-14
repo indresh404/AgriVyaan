@@ -11,6 +11,7 @@ let currentZoom = 1.0;
 let currentRotation = 0;
 let isTorchOn = false;
 let isStrobeOn = false;
+let isFlickerOn = false;
 let isStreaming = false;
 let streamStartTime = null;
 let streamTimerInterval = null;
@@ -78,6 +79,7 @@ const modalVideoTitle = document.getElementById('modalVideoTitle');
 const btnModalDownload = document.getElementById('btnModalDownload');
 
 const btnTorch = document.getElementById('btnTorch');
+const btnFlicker = document.getElementById('btnFlicker');
 const btnStrobe = document.getElementById('btnStrobe');
 const btnToggleReticle = document.getElementById('btnToggleReticle');
 const zoomSlider = document.getElementById('zoomSlider');
@@ -94,7 +96,7 @@ document.addEventListener('DOMContentLoaded', () => {
   setupVideoInteractions();
   fetchSoundList();
   fetchRecordingsList();
-  initMap();
+  initRadar();
   connectWebSocket();
 });
 
@@ -166,6 +168,8 @@ function connectWebSocket() {
 
       ws.send(JSON.stringify({ cmd: 'start_stream', mode: currentMode }));
       ws.send(JSON.stringify({ cmd: 'get_status' }));
+      ws.send(JSON.stringify({ cmd: 'set_gps_streaming', enabled: currentViewLayout === 'radar' }));
+      ws.send(JSON.stringify({ cmd: 'set_video_streaming', enabled: currentViewLayout === 'video' }));
 
       if (lastTelemetryTime > 0) {
         sendCommand('sync_track', { since: lastTelemetryTime });
@@ -375,21 +379,29 @@ async function handleServerMessage(msg) {
         fetchRecordingsList();
       }
     } else if (msg.cmd === 'toggle_torch' || msg.cmd === 'torch') {
-      isTorchOn = msg.torchOn;
-      if (btnTorch) btnTorch.classList.toggle('active', isTorchOn);
-      if (isTorchOn && btnStrobe) {
+      isTorchOn = !!msg.torchOn;
+      if (isTorchOn) {
         isStrobeOn = false;
-        btnStrobe.classList.remove('active');
+        isFlickerOn = false;
       }
+      updateLightButtonsUI();
       appendLog(`Torch is ${isTorchOn ? 'ON' : 'OFF'}`, 'info');
     } else if (msg.cmd === 'toggle_strobe') {
-      isStrobeOn = msg.strobeOn;
-      if (btnStrobe) btnStrobe.classList.toggle('active', isStrobeOn);
-      if (isStrobeOn && btnTorch) {
+      isStrobeOn = !!msg.strobeOn;
+      if (isStrobeOn) {
         isTorchOn = false;
-        btnTorch.classList.remove('active');
+        isFlickerOn = false;
       }
+      updateLightButtonsUI();
       appendLog(`Airplane Beacon Strobe: ${isStrobeOn ? 'ACTIVATED' : 'STOPPED'}`, 'success');
+    } else if (msg.cmd === 'toggle_flicker') {
+      isFlickerOn = !!msg.flickerOn;
+      if (isFlickerOn) {
+        isTorchOn = false;
+        isStrobeOn = false;
+      }
+      updateLightButtonsUI();
+      appendLog(`Fast Continuous Flicker: ${isFlickerOn ? 'ACTIVATED' : 'STOPPED'}`, 'success');
     } else if (msg.cmd === 'switch_camera') {
       appendLog('Camera lens switched successfully!', 'success');
     } else if (msg.cmd === 'play_sound') {
@@ -400,7 +412,6 @@ async function handleServerMessage(msg) {
     } else if (msg.cmd === 'take_snapshot') {
       if (msg.success) {
         appendLog(`📸 Photo snapshot saved with GPS EXIF: ${msg.fileName}`, 'success');
-        loadPhotosPins();
       } else {
         appendLog('Failed to capture photo on drone phone', 'error');
       }
@@ -685,26 +696,54 @@ function switchCamera() {
   appendLog('Switching camera lens...', 'info');
 }
 
-function toggleStrobe() {
-  isStrobeOn = !isStrobeOn;
-  if (btnStrobe) btnStrobe.classList.toggle('active', isStrobeOn);
-  if (isStrobeOn && isTorchOn) {
-    isTorchOn = false;
-    if (btnTorch) btnTorch.classList.remove('active');
-  }
-  sendCommand('toggle_strobe');
-  appendLog(`Airplane Beacon: ${isStrobeOn ? 'ACTIVATED' : 'STOPPED'}`, 'success');
+function updateLightButtonsUI() {
+  const btnTorchEl = document.getElementById('btnTorch');
+  const btnFlickerEl = document.getElementById('btnFlicker');
+  const btnStrobeEl = document.getElementById('btnStrobe');
+  const btnDrawerTorchEl = document.getElementById('btnDrawerTorch');
+  const btnDrawerFlickerEl = document.getElementById('btnDrawerFlicker');
+  const btnDrawerStrobeEl = document.getElementById('btnDrawerStrobe');
+
+  if (btnTorchEl) btnTorchEl.classList.toggle('active', !!isTorchOn);
+  if (btnFlickerEl) btnFlickerEl.classList.toggle('active', !!isFlickerOn);
+  if (btnStrobeEl) btnStrobeEl.classList.toggle('active', !!isStrobeOn);
+
+  if (btnDrawerTorchEl) btnDrawerTorchEl.classList.toggle('active', !!isTorchOn);
+  if (btnDrawerFlickerEl) btnDrawerFlickerEl.classList.toggle('active', !!isFlickerOn);
+  if (btnDrawerStrobeEl) btnDrawerStrobeEl.classList.toggle('active', !!isStrobeOn);
 }
 
 function toggleTorch() {
   isTorchOn = !isTorchOn;
-  if (btnTorch) btnTorch.classList.toggle('active', isTorchOn);
-  if (isTorchOn && isStrobeOn) {
+  if (isTorchOn) {
     isStrobeOn = false;
-    if (btnStrobe) btnStrobe.classList.remove('active');
+    isFlickerOn = false;
   }
+  updateLightButtonsUI();
   sendCommand('toggle_torch');
   appendLog(`Torch: ${isTorchOn ? 'ON' : 'OFF'}`, 'info');
+}
+
+function toggleFlicker() {
+  isFlickerOn = !isFlickerOn;
+  if (isFlickerOn) {
+    isTorchOn = false;
+    isStrobeOn = false;
+  }
+  updateLightButtonsUI();
+  sendCommand('toggle_flicker');
+  appendLog(`Fast Continuous Flicker: ${isFlickerOn ? 'ACTIVATED' : 'STOPPED'}`, 'success');
+}
+
+function toggleStrobe() {
+  isStrobeOn = !isStrobeOn;
+  if (isStrobeOn) {
+    isTorchOn = false;
+    isFlickerOn = false;
+  }
+  updateLightButtonsUI();
+  sendCommand('toggle_strobe');
+  appendLog(`Airplane Beacon: ${isStrobeOn ? 'ACTIVATED' : 'STOPPED'}`, 'success');
 }
 
 function cycleCameraSource() {
@@ -1238,235 +1277,452 @@ function setupDataChannel(channel) {
 }
 
 // ==========================================================================
-// Viewport Layout Switcher (Video Big / Map Big / Split / PiP)
+// Viewport Layout Switcher (Dual Split / Video Full / Radar Full)
 // ==========================================================================
 
-let currentViewLayout = 'video';
+let currentViewLayout = 'video'; // Exclusive View: 'video' (Full Stream) OR 'radar' (Full Radar)
 
 function setViewLayout(mode) {
   currentViewLayout = mode;
   const viewport = document.getElementById('viewport');
   if (!viewport) return;
 
-  viewport.classList.remove('layout-video-big', 'layout-map-big', 'layout-split', 'layout-pip');
+  viewport.classList.remove('layout-video', 'layout-radar');
 
   const btnVid = document.getElementById('btnLayoutVideo');
-  const btnMap = document.getElementById('btnLayoutMap');
-  const btnSplit = document.getElementById('btnLayoutSplit');
-  const btnPip = document.getElementById('btnLayoutPip');
+  const btnRadar = document.getElementById('btnLayoutRadar');
 
-  [btnVid, btnMap, btnSplit, btnPip].forEach(btn => { if (btn) btn.classList.remove('active'); });
+  if (btnVid) btnVid.classList.toggle('active', mode === 'video');
+  if (btnRadar) btnRadar.classList.toggle('active', mode === 'radar');
 
-  if (mode === 'video') {
-    viewport.classList.add('layout-video-big');
-    if (btnVid) btnVid.classList.add('active');
-  } else if (mode === 'map') {
-    viewport.classList.add('layout-map-big');
-    if (btnMap) btnMap.classList.add('active');
-  } else if (mode === 'split') {
-    viewport.classList.add('layout-split');
-    if (btnSplit) btnSplit.classList.add('active');
-  } else if (mode === 'pip') {
-    viewport.classList.add('layout-pip');
-    if (btnPip) btnPip.classList.add('active');
-  }
+  if (mode === 'radar') {
+    viewport.classList.add('layout-radar');
+    appendLog('🎯 Switched to TACTICAL RADAR (Requesting live GPS/Compass telemetry...)', 'info');
 
-  appendLog(`Viewport layout switched to: ${mode.toUpperCase()}`, 'info');
+    // 1. Tell drone phone to send live GPS telemetry
+    sendCommand('set_gps_streaming', { enabled: true });
 
-  setTimeout(() => {
-    if (leafletMap) {
-      leafletMap.invalidateSize();
+    // 2. Pause video track transmission to free 100% Wi-Fi bandwidth
+    sendCommand('set_video_streaming', { enabled: false });
+
+    // 3. Start 60FPS radar render loop
+    if (!animationFrameId) {
+      animationFrameId = requestAnimationFrame(radarAnimationLoop);
     }
-  }, 250);
-}
-
-// ==========================================================================
-// Tactical Offline Leaflet Map System
-// ==========================================================================
-
-let leafletMap = null;
-let activeTileLayer = null;
-let activeMapLayerName = 'default';
-const mapLayersList = ['default', 'satellite', 'terrain', 'grid'];
-let currentLayerIndex = 0;
-
-let droneMarker = null;
-let accuracyCircle = null;
-let homeMarker = null;
-let homeLine = null;
-let adminMarker = null;
-let flightTrackLine = null;
-let flightTrackPoints = [];
-let isFollowDrone = true;
-let isHeadingUp = false;
-
-// Layer Groups
-let waypointsLayerGroup = null;
-let fieldsLayerGroup = null;
-let photosLayerGroup = null;
-let measureLayerGroup = null;
-let geofenceLayerGroup = null;
-
-function initMap() {
-  if (leafletMap || typeof L === 'undefined') return;
-  const mapEl = document.getElementById('leafletMap');
-  if (!mapEl) return;
-
-  // Initialize Leaflet Map (centered on default coords until GPS fix)
-  leafletMap = L.map('leafletMap', {
-    zoomControl: false,
-    attributionControl: false
-  }).setView([20.5937, 78.9629], 15);
-
-  L.control.zoom({ position: 'bottomright' }).addTo(leafletMap);
-  L.control.scale({ imperial: false, metric: true, position: 'bottomleft' }).addTo(leafletMap);
-
-  // Layer groups
-  waypointsLayerGroup = L.layerGroup().addTo(leafletMap);
-  fieldsLayerGroup = L.layerGroup().addTo(leafletMap);
-  photosLayerGroup = L.layerGroup().addTo(leafletMap);
-  measureLayerGroup = L.layerGroup().addTo(leafletMap);
-  geofenceLayerGroup = L.layerGroup().addTo(leafletMap);
-
-  // Setup Tile Layer from phone server MBTiles endpoint
-  setupTileLayer('default');
-
-  // Custom Tactical Drone Marker (SVG Arrow rotated to Heading)
-  const droneIcon = L.divIcon({
-    className: 'drone-map-marker-div',
-    html: `<div id="droneMarkerIcon" class="drone-marker-inner">
-             <svg width="42" height="42" viewBox="0 0 42 42">
-               <circle cx="21" cy="21" r="16" fill="#00e5ff" fill-opacity="0.25" stroke="#00e5ff" stroke-width="2"/>
-               <polygon points="21,5 29,31 21,25 13,31" fill="#00e5ff" stroke="#090d14" stroke-width="1.5"/>
-               <circle cx="21" cy="21" r="3.5" fill="#ffffff"/>
-             </svg>
-           </div>`,
-    iconSize: [42, 42],
-    iconAnchor: [21, 21]
-  });
-
-  droneMarker = L.marker([20.5937, 78.9629], { icon: droneIcon, zIndexOffset: 1000 }).addTo(leafletMap);
-
-  accuracyCircle = L.circle([20.5937, 78.9629], {
-    radius: 12,
-    color: '#00e5ff',
-    weight: 1,
-    fillColor: '#00e5ff',
-    fillOpacity: 0.12
-  }).addTo(leafletMap);
-
-  // Flight Track Polyline
-  flightTrackLine = L.polyline([], {
-    color: '#00e5ff',
-    weight: 3.5,
-    opacity: 0.85,
-    lineJoin: 'round'
-  }).addTo(leafletMap);
-
-  // Home Marker
-  const homeIcon = L.divIcon({
-    className: 'home-marker-div',
-    html: `<div class="home-marker-badge">🏠 HOME</div>`,
-    iconSize: [60, 24],
-    iconAnchor: [30, 12]
-  });
-  homeMarker = L.marker([0, 0], { icon: homeIcon, opacity: 0, zIndexOffset: 900 }).addTo(leafletMap);
-  homeLine = L.polyline([], { color: '#ffea00', weight: 1.5, dashArray: '4, 6', opacity: 0.7 }).addTo(leafletMap);
-
-  // Map Click Listener for interactive tools
-  leafletMap.on('click', handleMapClick);
-
-  // Load existing data from phone
-  loadWaypoints();
-  loadFields();
-  loadGeofence();
-  loadPhotosPins();
-}
-
-function setupTileLayer(layerName = 'default') {
-  if (!leafletMap) return;
-  activeMapLayerName = layerName;
-
-  if (activeTileLayer) {
-    leafletMap.removeLayer(activeTileLayer);
-    activeTileLayer = null;
-  }
-
-  const gridEl = document.getElementById('mapGridFallback');
-
-  if (layerName === 'grid') {
-    if (gridEl) gridEl.style.display = 'block';
-    return;
-  }
-
-  // Load from phone's offline MBTiles endpoint
-  const tileUrl = `/tiles/${encodeURIComponent(layerName)}/{z}/{x}/{y}.png`;
-  activeTileLayer = L.tileLayer(tileUrl, {
-    maxZoom: 19,
-    minZoom: 1,
-    tileSize: 256
-  });
-
-  activeTileLayer.on('tileerror', () => {
-    // If tiles are missing or not downloaded for this region, show tactical grid subtly
-    if (gridEl) gridEl.style.display = 'block';
-  });
-
-  activeTileLayer.on('tileload', () => {
-    if (gridEl) gridEl.style.display = 'none';
-  });
-
-  activeTileLayer.addTo(leafletMap);
-}
-
-function cycleMapLayer() {
-  currentLayerIndex = (currentLayerIndex + 1) % mapLayersList.length;
-  const layer = mapLayersList[currentLayerIndex];
-  setupTileLayer(layer);
-  appendLog(`Switched map layer: ${layer.toUpperCase()}`, 'info');
-}
-
-function toggleFollowDrone() {
-  isFollowDrone = !isFollowDrone;
-  const btn = document.getElementById('btnFollowDrone');
-  if (btn) btn.classList.toggle('active', isFollowDrone);
-  appendLog(`Drone Center Follow: ${isFollowDrone ? 'ACTIVE' : 'MANUAL PAN'}`, 'info');
-  if (isFollowDrone && lastTelemetry && leafletMap) {
-    leafletMap.panTo([lastTelemetry.lat, lastTelemetry.lon], { animate: true });
-  }
-}
-
-function toggleHeadingUp() {
-  isHeadingUp = !isHeadingUp;
-  const btn = document.getElementById('btnHeadingUp');
-  if (btn) btn.classList.toggle('active', isHeadingUp);
-  const mapEl = document.getElementById('leafletMap');
-  if (!mapEl) return;
-
-  if (isHeadingUp && lastTelemetry) {
-    const deg = Math.round(lastTelemetry.heading || 0);
-    mapEl.style.transform = `rotate(${-deg}deg)`;
-    appendLog(`Heading-Up mode: ${deg}°`, 'info');
+    setTimeout(() => {
+      resizeRadarCanvas();
+      renderRadar();
+    }, 60);
   } else {
-    mapEl.style.transform = 'rotate(0deg)';
-    appendLog('North-Up mode active', 'info');
+    viewport.classList.add('layout-video');
+    appendLog('📹 Switched to VIDEO FEED (Pausing GPS telemetry to dedicate 100% bandwidth to video)', 'info');
+
+    // 1. Tell drone phone to pause GPS telemetry transmission across Wi-Fi
+    sendCommand('set_gps_streaming', { enabled: false });
+
+    // 2. Re-enable video track transmission for lag-free video footage
+    sendCommand('set_video_streaming', { enabled: true });
+
+    // 3. Stop radar canvas loop to save client CPU/GPU
+    if (animationFrameId) {
+      cancelAnimationFrame(animationFrameId);
+      animationFrameId = null;
+    }
   }
 }
 
-function fitTrackToBounds() {
-  if (!leafletMap || flightTrackPoints.length === 0) {
-    appendLog('No flight track points recorded yet to fit', 'info');
+// ==========================================================================
+// Tactical Radar Plane Engine (Zero Real Maps, Live Admin & Drone Relative Positioning)
+// ==========================================================================
+
+let radarCanvas = null;
+let radarCtx = null;
+let radarRangeMeters = 100; // Radius distance covered by radar plane in meters
+let isRadarAutoFit = true;
+let sweepAngle = 0;
+let animationFrameId = null;
+
+// Node Positions (Admin = Ground Station, Drone = Onboard Camera Phone)
+let adminPosition = null; // { lat, lon, label }
+let dronePosition = null; // { lat, lon, heading, speed, altBaro, altGps, sats, fixType }
+let droneRelativeTrail = []; // [{ relEast, relNorth, timestamp }]
+
+function initRadar() {
+  radarCanvas = document.getElementById('radarCanvas');
+  if (!radarCanvas) return;
+  radarCtx = radarCanvas.getContext('2d');
+
+  resizeRadarCanvas();
+  window.addEventListener('resize', () => {
+    resizeRadarCanvas();
+    if (currentViewLayout === 'radar') renderRadar();
+  });
+
+  // Automatically request browser GPS for Admin (Ground Station) if available
+  if (navigator.geolocation) {
+    navigator.geolocation.getCurrentPosition(
+      (pos) => {
+        adminPosition = {
+          lat: pos.coords.latitude,
+          lon: pos.coords.longitude,
+          label: 'Admin (GPS)'
+        };
+        appendLog(`Admin position locked via GPS: ${adminPosition.lat.toFixed(5)}, ${adminPosition.lon.toFixed(5)}`, 'success');
+        if (currentViewLayout === 'radar') renderRadar();
+      },
+      (err) => {
+        console.log('Browser geolocation notice:', err.message);
+      },
+      { enableHighAccuracy: true, timeout: 6000 }
+    );
+
+    navigator.geolocation.watchPosition(
+      (pos) => {
+        if (adminPosition) {
+          adminPosition.lat = pos.coords.latitude;
+          adminPosition.lon = pos.coords.longitude;
+        }
+      },
+      () => {},
+      { enableHighAccuracy: true, maximumAge: 3000 }
+    );
+  }
+
+  // Only run continuous loop if radar is currently active
+  if (currentViewLayout === 'radar' && !animationFrameId) {
+    animationFrameId = requestAnimationFrame(radarAnimationLoop);
+  }
+}
+
+function resizeRadarCanvas() {
+  if (!radarCanvas) return;
+  const rect = radarCanvas.getBoundingClientRect();
+  const dpr = window.devicePixelRatio || 1;
+  radarCanvas.width = Math.max(100, Math.floor(rect.width * dpr));
+  radarCanvas.height = Math.max(100, Math.floor(rect.height * dpr));
+}
+
+function radarAnimationLoop() {
+  if (currentViewLayout !== 'radar') {
+    animationFrameId = null;
     return;
   }
-  const latLngs = flightTrackPoints.map(p => [p.lat, p.lon]);
-  const bounds = L.latLngBounds(latLngs);
-  leafletMap.fitBounds(bounds, { padding: [40, 40] });
-  appendLog('Zoomed map to fit entire flight track', 'info');
+  sweepAngle = (sweepAngle + 0.035) % (Math.PI * 2);
+  renderRadar();
+  animationFrameId = requestAnimationFrame(radarAnimationLoop);
+}
+
+function renderRadar() {
+  if (!radarCanvas || !radarCtx) return;
+  const ctx = radarCtx;
+  const width = radarCanvas.width;
+  const height = radarCanvas.height;
+  const dpr = window.devicePixelRatio || 1;
+
+  ctx.clearRect(0, 0, width, height);
+
+  const cx = width / 2;
+  const cy = height / 2;
+  const maxRadius = Math.min(cx, cy) * 0.88;
+
+  // 1. Draw Tactical Cockpit Radar Radial Plane
+  const bgGrad = ctx.createRadialGradient(cx, cy, 10, cx, cy, maxRadius * 1.05);
+  bgGrad.addColorStop(0, '#0c1521');
+  bgGrad.addColorStop(0.7, '#070c14');
+  bgGrad.addColorStop(1, '#04070b');
+
+  ctx.fillStyle = bgGrad;
+  ctx.beginPath();
+  ctx.arc(cx, cy, maxRadius, 0, Math.PI * 2);
+  ctx.fill();
+
+  // Subtle grid lines inside radar circle
+  ctx.save();
+  ctx.beginPath();
+  ctx.arc(cx, cy, maxRadius, 0, Math.PI * 2);
+  ctx.clip();
+
+  ctx.strokeStyle = 'rgba(0, 229, 255, 0.05)';
+  ctx.lineWidth = 1 * dpr;
+  const gridStep = 40 * dpr;
+  for (let x = cx % gridStep; x < width; x += gridStep) {
+    ctx.beginPath();
+    ctx.moveTo(x, 0);
+    ctx.lineTo(x, height);
+    ctx.stroke();
+  }
+  for (let y = cy % gridStep; y < height; y += gridStep) {
+    ctx.beginPath();
+    ctx.moveTo(0, y);
+    ctx.lineTo(width, y);
+    ctx.stroke();
+  }
+
+  // 2. Draw Rotating Radar Scanning Sweep
+  ctx.save();
+  ctx.translate(cx, cy);
+  ctx.rotate(sweepAngle);
+  const sweepGrad = ctx.createRadialGradient(0, 0, 0, 0, 0, maxRadius);
+  sweepGrad.addColorStop(0, 'rgba(0, 229, 255, 0.25)');
+  sweepGrad.addColorStop(0.8, 'rgba(0, 229, 255, 0.08)');
+  sweepGrad.addColorStop(1, 'rgba(0, 229, 255, 0.0)');
+  ctx.fillStyle = sweepGrad;
+  ctx.beginPath();
+  ctx.moveTo(0, 0);
+  ctx.arc(0, 0, maxRadius, -0.3, 0);
+  ctx.closePath();
+  ctx.fill();
+
+  ctx.strokeStyle = 'rgba(0, 229, 255, 0.6)';
+  ctx.lineWidth = 1.5 * dpr;
+  ctx.beginPath();
+  ctx.moveTo(0, 0);
+  ctx.lineTo(maxRadius, 0);
+  ctx.stroke();
+  ctx.restore();
+
+  ctx.restore(); // Restore clip
+
+  // 3. Draw Concentric Range Rings with Distance Labels
+  const numRings = 4;
+  for (let i = 1; i <= numRings; i++) {
+    const ringRadius = (maxRadius / numRings) * i;
+    const ringDistanceM = Math.round((radarRangeMeters / numRings) * i);
+    const distText = ringDistanceM >= 1000 ? `${(ringDistanceM / 1000).toFixed(1)}km` : `${ringDistanceM}m`;
+
+    ctx.strokeStyle = i === numRings ? 'rgba(0, 229, 255, 0.45)' : 'rgba(0, 229, 255, 0.15)';
+    ctx.lineWidth = (i === numRings ? 2 : 1) * dpr;
+    if (i < numRings) {
+      ctx.setLineDash([4 * dpr, 4 * dpr]);
+    } else {
+      ctx.setLineDash([]);
+    }
+    ctx.beginPath();
+    ctx.arc(cx, cy, ringRadius, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.setLineDash([]);
+
+    // Range label on the 045° diagonal
+    const labelAngle = Math.PI * 0.25;
+    const lx = cx + Math.cos(labelAngle) * ringRadius;
+    const ly = cy + Math.sin(labelAngle) * ringRadius;
+    ctx.fillStyle = 'rgba(0, 229, 255, 0.65)';
+    ctx.font = `bold ${10 * dpr}px monospace`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(distText, lx + 12 * dpr, ly);
+  }
+
+  // 4. Draw Cardinal Crosshairs & Compass Ticks
+  ctx.strokeStyle = 'rgba(0, 229, 255, 0.35)';
+  ctx.lineWidth = 1 * dpr;
+  // Vertical axis (North-South)
+  ctx.beginPath();
+  ctx.moveTo(cx, cy - maxRadius);
+  ctx.lineTo(cx, cy + maxRadius);
+  ctx.stroke();
+  // Horizontal axis (East-West)
+  ctx.beginPath();
+  ctx.moveTo(cx - maxRadius, cy);
+  ctx.lineTo(cx + maxRadius, cy);
+  ctx.stroke();
+
+  // Outer Compass Degree Ticks & Cardinal Labels
+  ctx.fillStyle = '#00e5ff';
+  ctx.font = `bold ${11 * dpr}px monospace`;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+
+  // North (000°)
+  ctx.fillStyle = '#00e676';
+  ctx.fillText('▲ N 000°', cx, cy - maxRadius - 14 * dpr);
+  // East (090°)
+  ctx.fillStyle = '#8b9bb4';
+  ctx.fillText('E 090°', cx + maxRadius + 24 * dpr, cy);
+  // South (180°)
+  ctx.fillText('S 180°', cx, cy + maxRadius + 14 * dpr);
+  // West (270°)
+  ctx.fillText('W 270°', cx - maxRadius - 24 * dpr, cy);
+
+  // Outer circle tick marks every 15 degrees
+  for (let deg = 0; deg < 360; deg += 15) {
+    const rad = (deg - 90) * (Math.PI / 180);
+    const tickLen = (deg % 45 === 0 ? 8 : 4) * dpr;
+    const x1 = cx + Math.cos(rad) * maxRadius;
+    const y1 = cy + Math.sin(rad) * maxRadius;
+    const x2 = cx + Math.cos(rad) * (maxRadius - tickLen);
+    const y2 = cy + Math.sin(rad) * (maxRadius - tickLen);
+    ctx.strokeStyle = deg % 45 === 0 ? 'rgba(0, 229, 255, 0.6)' : 'rgba(0, 229, 255, 0.2)';
+    ctx.lineWidth = 1 * dpr;
+    ctx.beginPath();
+    ctx.moveTo(x1, y1);
+    ctx.lineTo(x2, y2);
+    ctx.stroke();
+  }
+
+  // 5. Draw Flight Trail Relative to Admin
+  if (droneRelativeTrail.length > 1) {
+    ctx.save();
+    ctx.lineWidth = 2.5 * dpr;
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+    for (let t = 1; t < droneRelativeTrail.length; t++) {
+      const p1 = droneRelativeTrail[t - 1];
+      const p2 = droneRelativeTrail[t];
+      const x1 = cx + (p1.relEast / radarRangeMeters) * maxRadius;
+      const y1 = cy - (p1.relNorth / radarRangeMeters) * maxRadius;
+      const x2 = cx + (p2.relEast / radarRangeMeters) * maxRadius;
+      const y2 = cy - (p2.relNorth / radarRangeMeters) * maxRadius;
+      const alpha = (t / droneRelativeTrail.length) * 0.75;
+      ctx.strokeStyle = `rgba(0, 229, 255, ${alpha})`;
+      ctx.beginPath();
+      ctx.moveTo(x1, y1);
+      ctx.lineTo(x2, y2);
+      ctx.stroke();
+    }
+    ctx.restore();
+  }
+
+  // 6. Draw Drone Node and Connecting Distance Vector Line
+  const hasDroneGps = dronePosition && (dronePosition.lat !== 0 || dronePosition.lon !== 0);
+  const hasAdminGps = adminPosition && (adminPosition.lat !== 0 || adminPosition.lon !== 0);
+
+  if (dronePosition) {
+    let droneX = cx;
+    let droneY = cy;
+    let distStr = '-- m';
+    const isDroneDegraded = !hasDroneGps || (dronePosition.fixType && (dronePosition.fixType.includes('Search') || dronePosition.fixType.includes('Lost')));
+
+    if (hasAdminGps && hasDroneGps) {
+      const dEast = (dronePosition.lon - adminPosition.lon) * 111320 * Math.cos((adminPosition.lat * Math.PI) / 180);
+      const dNorth = (dronePosition.lat - adminPosition.lat) * 110540;
+      const distMeters = Math.hypot(dEast, dNorth);
+      const bearingDeg = (Math.atan2(dEast, dNorth) * (180 / Math.PI) + 360) % 360;
+
+      // Auto-Scale Radar Range so Drone stays visible at ~70% radius
+      if (isRadarAutoFit) {
+        const targetRange = Math.max(50, distMeters * 1.35);
+        radarRangeMeters += (targetRange - radarRangeMeters) * 0.12;
+      }
+
+      droneX = cx + (dEast / radarRangeMeters) * maxRadius;
+      droneY = cy - (dNorth / radarRangeMeters) * maxRadius;
+
+      // Golden Dashed Distance Vector Line connecting Admin to Drone
+      ctx.save();
+      ctx.strokeStyle = isDroneDegraded ? 'rgba(255, 179, 0, 0.7)' : '#ffd600';
+      ctx.lineWidth = 1.8 * dpr;
+      ctx.setLineDash([5 * dpr, 4 * dpr]);
+      ctx.beginPath();
+      ctx.moveTo(cx, cy);
+      ctx.lineTo(droneX, droneY);
+      ctx.stroke();
+      ctx.setLineDash([]);
+
+      // Live Distance Badge in the middle of connecting line
+      const midX = (cx + droneX) / 2;
+      const midY = (cy + droneY) / 2;
+      distStr = distMeters >= 1000 ? `${(distMeters / 1000).toFixed(2)} km` : `${Math.round(distMeters)} m`;
+      const tagText = `${distStr} • ${Math.round(bearingDeg).toString().padStart(3, '0')}°`;
+
+      ctx.font = `bold ${10 * dpr}px monospace`;
+      const tagWidth = ctx.measureText(tagText).width + 12 * dpr;
+      ctx.fillStyle = 'rgba(10, 16, 26, 0.9)';
+      ctx.strokeStyle = isDroneDegraded ? '#ffb300' : '#ffd600';
+      ctx.lineWidth = 1 * dpr;
+      ctx.beginPath();
+      ctx.roundRect(midX - tagWidth / 2, midY - 9 * dpr, tagWidth, 18 * dpr, 4 * dpr);
+      ctx.fill();
+      ctx.stroke();
+
+      ctx.fillStyle = isDroneDegraded ? '#ffb300' : '#ffd600';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(tagText, midX, midY);
+      ctx.restore();
+    } else {
+      // Waiting for GPS lock: draw drone at center with live compass rotation
+      droneX = cx;
+      droneY = cy - 28 * dpr;
+      distStr = 'WAITING GPS';
+    }
+
+    // Drone Marker
+    ctx.save();
+    ctx.translate(droneX, droneY);
+
+    // Glowing pulse ring around drone
+    const pulseRadius = 14 * dpr + Math.sin(Date.now() / 200) * 3 * dpr;
+    ctx.strokeStyle = isDroneDegraded ? 'rgba(255, 179, 0, 0.5)' : 'rgba(0, 229, 255, 0.4)';
+    ctx.lineWidth = 1.5 * dpr;
+    ctx.beginPath();
+    ctx.arc(0, 0, pulseRadius, 0, Math.PI * 2);
+    ctx.stroke();
+
+    // Rotated Drone Icon with Heading Pointer
+    ctx.rotate(((dronePosition.heading || 0) * Math.PI) / 180);
+
+    ctx.fillStyle = isDroneDegraded ? '#ffb300' : '#00e5ff';
+    ctx.strokeStyle = '#090d14';
+    ctx.lineWidth = 2 * dpr;
+    ctx.beginPath();
+    ctx.moveTo(0, -14 * dpr); // Nose
+    ctx.lineTo(10 * dpr, 10 * dpr); // Right wing
+    ctx.lineTo(0, 6 * dpr); // Tail notch
+    ctx.lineTo(-10 * dpr, 10 * dpr); // Left wing
+    ctx.closePath();
+    ctx.fill();
+    ctx.stroke();
+
+    ctx.fillStyle = '#ffffff';
+    ctx.beginPath();
+    ctx.arc(0, 0, 2.5 * dpr, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+
+    // Drone Label
+    ctx.font = `bold ${10 * dpr}px monospace`;
+    ctx.fillStyle = isDroneDegraded ? '#ffb300' : '#00e5ff';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'top';
+    const altStr = `${dronePosition.altBaro ? dronePosition.altBaro.toFixed(1) + 'm' : ''}`;
+    const statusNote = !hasDroneGps ? 'SEARCHING' : (isDroneDegraded ? 'WEAK FIX' : distStr);
+    ctx.fillText(`🚁 DRONE [${statusNote}${altStr ? ' | ' + altStr : ''}]`, droneX, droneY + 18 * dpr);
+  }
+
+  // 7. Draw Admin (Ground Station) Node at Center
+  ctx.save();
+  // Pulsing beacon ring around Admin
+  const adminPulse = 12 * dpr + Math.cos(Date.now() / 250) * 3 * dpr;
+  ctx.strokeStyle = 'rgba(0, 150, 255, 0.4)';
+  ctx.lineWidth = 1.5 * dpr;
+  ctx.beginPath();
+  ctx.arc(cx, cy, adminPulse, 0, Math.PI * 2);
+  ctx.stroke();
+
+  // Solid Admin Dot
+  ctx.fillStyle = '#00a0ff';
+  ctx.strokeStyle = '#ffffff';
+  ctx.lineWidth = 2 * dpr;
+  ctx.beginPath();
+  ctx.arc(cx, cy, 5 * dpr, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.stroke();
+
+  // Admin Label
+  ctx.font = `bold ${10 * dpr}px monospace`;
+  ctx.fillStyle = '#64b5f6';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'top';
+  ctx.fillText('👤 ADMIN (YOU)', cx, cy + 12 * dpr);
+  ctx.restore();
 }
 
 // ==========================================================================
-// Telemetry Processing & HUD Updates
+// Telemetry Processing (Real-Time Distance & Direction Updates)
 // ==========================================================================
+
+let isFirstGpsFix = true;
 
 function processTelemetry(data) {
   if (!data) return;
@@ -1480,985 +1736,187 @@ function processTelemetry(data) {
   const speed = data.speedKmh !== undefined ? data.speedKmh : ((data.speed || 0) * 3.6);
   const altGps = data.altitudeGps !== undefined ? data.altitudeGps : 0;
   const altBaro = data.altitudeBaro !== undefined ? data.altitudeBaro : 0;
-  const accuracy = data.accuracy !== undefined ? data.accuracy : 15;
   const satsUsed = data.satellitesUsed !== undefined ? data.satellitesUsed : 0;
   const satsVis = data.satellitesVisible !== undefined ? data.satellitesVisible : 0;
-  const fixType = data.fixType || 'Searching';
-  const headingSource = data.headingSource || 'GPS';
+  const fixType = data.fixType || 'GPS Fix';
 
-  // Update Top HUD Telemetry Strip
-  const elHeading = document.getElementById('mapHeadingVal');
-  const elHeadingSource = document.getElementById('mapHeadingSource');
-  if (elHeading) elHeading.textContent = `${Math.round(heading).toString().padStart(3, '0')}°`;
-  if (elHeadingSource) elHeadingSource.textContent = headingSource;
+  const hasCoords = (lat !== 0 || lon !== 0) && lat !== undefined && lon !== undefined;
 
-  const elCoords = document.getElementById('mapCoordsText');
-  if (elCoords) {
-    if (coordFormat === 'DMS') {
-      elCoords.textContent = `${toDMS(lat, true)}, ${toDMS(lon, false)}`;
-    } else {
-      elCoords.textContent = `${lat.toFixed(6)}°, ${lon.toFixed(6)}°`;
-    }
+  // Default Admin location to Drone Takeoff / First GPS fix if Admin GPS not yet set
+  if (!adminPosition && hasCoords) {
+    adminPosition = {
+      lat: (data.homeLat && data.homeLat !== 0) ? data.homeLat : lat,
+      lon: (data.homeLon && data.homeLon !== 0) ? data.homeLon : lon,
+      label: 'Admin (Takeoff Point)'
+    };
+    appendLog(`Admin location locked to Drone Takeoff point`, 'info');
   }
 
-  const elAltBaro = document.getElementById('mapAltBaro');
-  const elAltGps = document.getElementById('mapAltGps');
+  // Update Drone State
+  dronePosition = {
+    lat: hasCoords ? lat : 0,
+    lon: hasCoords ? lon : 0,
+    heading,
+    speed,
+    altBaro,
+    altGps,
+    sats: satsUsed,
+    fixType,
+    status: data.status || 'locked'
+  };
+
+  const elDist = document.getElementById('radarDistanceVal');
+  const elBearing = document.getElementById('radarBearingVal');
+  const elOffset = document.getElementById('radarOffsetVal');
+
+  // Calculate Relative Metrics
+  if (adminPosition && hasCoords && (adminPosition.lat !== 0 || adminPosition.lon !== 0)) {
+    const dEast = (lon - adminPosition.lon) * 111320 * Math.cos((adminPosition.lat * Math.PI) / 180);
+    const dNorth = (lat - adminPosition.lat) * 110540;
+    const distMeters = Math.hypot(dEast, dNorth);
+    const bearingDeg = (Math.atan2(dEast, dNorth) * (180 / Math.PI) + 360) % 360;
+    const cardinal = getCardinal(bearingDeg);
+
+    // Save to trail
+    droneRelativeTrail.push({ relEast: dEast, relNorth: dNorth, timestamp: Date.now() });
+    if (droneRelativeTrail.length > 200) {
+      droneRelativeTrail.shift();
+    }
+
+    if (elDist) {
+      elDist.textContent = distMeters >= 1000 ? `${(distMeters / 1000).toFixed(2)} km` : `${distMeters.toFixed(1)} m`;
+    }
+    if (elBearing) {
+      elBearing.textContent = `${Math.round(bearingDeg).toString().padStart(3, '0')}° (${cardinal})`;
+    }
+    if (elOffset) {
+      const eastStr = `${dEast >= 0 ? '+' : ''}${Math.round(dEast)}m`;
+      const northStr = `${dNorth >= 0 ? '+' : ''}${Math.round(dNorth)}m`;
+      elOffset.textContent = `ΔE: ${eastStr}  ΔN: ${northStr}`;
+    }
+  } else {
+    // Waiting for GPS fix
+    if (elDist) elDist.textContent = 'WAITING GPS';
+    if (elBearing) {
+      const cardinal = getCardinal(heading);
+      elBearing.textContent = `${Math.round(heading).toString().padStart(3, '0')}° (${cardinal})`;
+    }
+    if (elOffset) elOffset.textContent = (data.alert || 'Acquiring Satellites...');
+  }
+
+  // Update Bottom Status Chips
+  const elAltBaro = document.getElementById('radarAltBaro');
+  const elAltGps = document.getElementById('radarAltGps');
+  const elSpeed = document.getElementById('radarSpeedVal');
+  const elHeading = document.getElementById('radarHeadingVal');
+  const elFix = document.getElementById('radarFixBadge');
+  const elSats = document.getElementById('radarSatsVal');
+
   if (elAltBaro) elAltBaro.textContent = `${altBaro.toFixed(1)}m`;
   if (elAltGps) elAltGps.textContent = `${altGps.toFixed(1)}m`;
-
-  const elSpeedKmh = document.getElementById('mapSpeedKmh');
-  const elSpeedMps = document.getElementById('mapSpeedMps');
-  if (elSpeedKmh) elSpeedKmh.textContent = `${speed.toFixed(1)} km/h`;
-  if (elSpeedMps) elSpeedMps.textContent = `(${(speed / 3.6).toFixed(1)} m/s)`;
-
-  // Update Bottom Status Strip
-  const elFixType = document.getElementById('mapFixType');
-  const elSatCount = document.getElementById('mapSatCount');
-  const elAccuracy = document.getElementById('mapAccuracy');
-  if (elFixType) {
-    elFixType.textContent = fixType;
-    elFixType.className = `fix-tag ${fixType.toLowerCase().includes('3d') ? 'fix-3d' : ''}`;
-  }
-  if (elSatCount) elSatCount.textContent = `${satsUsed}/${satsVis} sats`;
-  if (elAccuracy) elAccuracy.textContent = `±${accuracy.toFixed(1)}m`;
-
-  // Home Point Telemetry
-  if (data.homeLat && data.homeLon && (data.homeLat !== 0 || data.homeLon !== 0)) {
-    const distHome = calculateDistance(lat, lon, data.homeLat, data.homeLon);
-    const bearHome = calculateBearing(lat, lon, data.homeLat, data.homeLon);
-    const elHomeDist = document.getElementById('mapHomeDistance');
-    const elHomeBear = document.getElementById('mapHomeBearing');
-    if (elHomeDist) elHomeDist.textContent = distHome > 1000 ? `HOME: ${(distHome / 1000).toFixed(2)}km` : `HOME: ${Math.round(distHome)}m`;
-    if (elHomeBear) elHomeBear.textContent = `(${Math.round(bearHome)}°)`;
-
-    if (homeMarker) {
-      homeMarker.setLatLng([data.homeLat, data.homeLon]);
-      homeMarker.setOpacity(1);
-    }
-    if (homeLine) {
-      homeLine.setLatLngs([[lat, lon], [data.homeLat, data.homeLon]]);
+  if (elSpeed) elSpeed.textContent = `${speed.toFixed(1)} km/h`;
+  if (elHeading) elHeading.textContent = `${Math.round(heading).toString().padStart(3, '0')}°`;
+  if (elFix) {
+    elFix.textContent = fixType;
+    if (fixType.toLowerCase().includes('3d') || fixType.toLowerCase().includes('2d')) {
+      elFix.className = 'fix-tag fix-3d';
+    } else if (fixType.toLowerCase().includes('search')) {
+      elFix.className = 'fix-tag fix-searching';
+    } else {
+      elFix.className = 'fix-tag fix-lost';
     }
   }
-
-  // Update Leaflet Marker & Accuracy
-  if (leafletMap && droneMarker) {
-    const newPos = [lat, lon];
-    droneMarker.setLatLng(newPos);
-
-    const iconDiv = document.getElementById('droneMarkerIcon');
-    if (iconDiv) {
-      iconDiv.style.transform = `rotate(${heading}deg)`;
-    }
-
-    if (accuracyCircle) {
-      accuracyCircle.setLatLng(newPos);
-      accuracyCircle.setRadius(accuracy);
-    }
-
-    // Add point to track
-    addTrackPoint(lat, lon, speed, altBaro, data.timestamp);
-
-    // Follow drone if enabled
-    if (isFollowDrone) {
-      leafletMap.panTo(newPos, { animate: true, duration: 0.3 });
-    }
-
-    // Apply heading up rotation if active
-    if (isHeadingUp) {
-      const mapEl = document.getElementById('leafletMap');
-      if (mapEl) mapEl.style.transform = `rotate(${-Math.round(heading)}deg)`;
-    }
-  }
-}
-
-function addTrackPoint(lat, lon, speed, alt, timestamp) {
-  flightTrackPoints.push({ lat, lon, speed, alt, timestamp });
-  if (flightTrackPoints.length > 8000) {
-    flightTrackPoints.shift();
-  }
-  if (flightTrackLine) {
-    flightTrackLine.addLatLng([lat, lon]);
-  }
+  if (elSats) elSats.textContent = `${satsUsed}/${satsVis} sats`;
 }
 
 function processTrackSync(points) {
   if (!points || !points.length) return;
-  appendLog(`Syncing ${points.length} black-box track points from phone...`, 'info');
+  appendLog(`Syncing ${points.length} missed flight track points from black-box...`, 'info');
   for (const p of points) {
     const lat = p.lat !== undefined ? p.lat : p.rawLat;
     const lon = p.lon !== undefined ? p.lon : p.rawLon;
-    if (lat && lon) {
-      addTrackPoint(lat, lon, p.speedKmh || 0, p.altitudeBaro || 0, p.timestamp || Date.now());
+    if (adminPosition && lat && lon) {
+      const dEast = (lon - adminPosition.lon) * 111320 * Math.cos((adminPosition.lat * Math.PI) / 180);
+      const dNorth = (lat - adminPosition.lat) * 110540;
+      droneRelativeTrail.push({ relEast: dEast, relNorth: dNorth, timestamp: p.timestamp || Date.now() });
     }
   }
-  appendLog(`★ Black-box synchronization complete (${points.length} points restored)`, 'success');
-}
-
-function resetGpsWatchdog() {
-  if (gpsWatchdogTimer) clearTimeout(gpsWatchdogTimer);
-  const iconDiv = document.getElementById('droneMarkerIcon');
-  if (iconDiv) iconDiv.classList.remove('marker-stale');
-
-  gpsWatchdogTimer = setTimeout(() => {
-    const elapsed = Math.round((Date.now() - (lastTelemetryTime || Date.now())) / 1000);
-    appendLog(`⚠️ GPS fix lost: Last seen ${elapsed}s ago`, 'error');
-    const iconDiv = document.getElementById('droneMarkerIcon');
-    if (iconDiv) iconDiv.classList.add('marker-stale');
-    const elFixType = document.getElementById('mapFixType');
-    if (elFixType) elFixType.textContent = `Lost (${elapsed}s)`;
-  }, 10000);
-}
-
-function toDMS(deg, isLat) {
-  const absolute = Math.abs(deg);
-  const degrees = Math.floor(absolute);
-  const minutesNotTruncated = (absolute - degrees) * 60;
-  const minutes = Math.floor(minutesNotTruncated);
-  const seconds = Math.floor((minutesNotTruncated - minutes) * 60);
-  const dir = deg >= 0 ? (isLat ? 'N' : 'E') : (isLat ? 'S' : 'W');
-  return `${degrees}°${minutes}'${seconds}"${dir}`;
-}
-
-function toggleCoordFormat() {
-  coordFormat = coordFormat === 'DECIMAL' ? 'DMS' : 'DECIMAL';
-  if (lastTelemetry) processTelemetry(lastTelemetry);
-}
-
-function copyCoordinates(e) {
-  if (e) e.stopPropagation();
-  if (!lastTelemetry) return;
-  const text = `${lastTelemetry.lat.toFixed(6)}, ${lastTelemetry.lon.toFixed(6)}`;
-  navigator.clipboard.writeText(text).then(() => {
-    appendLog(`Copied coordinates to clipboard: ${text}`, 'success');
-  }).catch(() => {
-    appendLog(`Coordinates: ${text}`, 'info');
-  });
-}
-
-function resetHomePoint() {
-  if (!lastTelemetry) {
-    appendLog('Cannot reset home: No active GPS fix', 'error');
-    return;
+  if (droneRelativeTrail.length > 200) {
+    droneRelativeTrail = droneRelativeTrail.slice(-200);
   }
-  sendCommand('set_home', { lat: lastTelemetry.lat, lon: lastTelemetry.lon });
-  appendLog('Sent request to set Home to current drone position', 'info');
+  appendLog(`★ Flight track synchronized (${points.length} points)`, 'success');
 }
 
 // ==========================================================================
-// Interactive Map Tools: Waypoints, Field Drawing, Measure, Admin Pin
+// Radar Controls (Zoom, Auto-Fit, Set Admin, Clear Trail)
 // ==========================================================================
 
-let isDroppingWaypoint = false;
-let pendingWaypointCoord = null;
-let isDrawingField = false;
-let fieldDrawPoints = [];
-let fieldDrawPolyline = null;
-let isMeasuring = false;
-let measurePoints = [];
-
-function handleMapClick(e) {
-  const lat = e.latlng.lat;
-  const lon = e.latlng.lng;
-
-  if (isDroppingWaypoint) {
-    isDroppingWaypoint = false;
-    openWaypointModal(lat, lon);
-    return;
-  }
-
-  if (isDrawingField) {
-    fieldDrawPoints.push(e.latlng);
-    if (!fieldDrawPolyline) {
-      fieldDrawPolyline = L.polyline([e.latlng], { color: '#00e676', weight: 2.5, dashArray: '5, 5' }).addTo(leafletMap);
-    } else {
-      fieldDrawPolyline.addLatLng(e.latlng);
-    }
-    appendLog(`Field vertex ${fieldDrawPoints.length} added. Double-click or click tool again to finish.`, 'info');
-    return;
-  }
-
-  if (isMeasuring) {
-    measurePoints.push(e.latlng);
-    if (measurePoints.length === 1) {
-      measureLayerGroup.clearLayers();
-      L.circleMarker(e.latlng, { radius: 5, color: '#ffeb3b', fillColor: '#ffeb3b', fillOpacity: 0.8 }).addTo(measureLayerGroup);
-      appendLog('Measure start point set. Click next point...', 'info');
-    } else {
-      const p1 = measurePoints[measurePoints.length - 2];
-      const p2 = measurePoints[measurePoints.length - 1];
-      const dist = calculateDistance(p1.lat, p1.lng, p2.lat, p2.lng);
-      L.polyline([p1, p2], { color: '#ffeb3b', weight: 2.5, dashArray: '4, 4' }).addTo(measureLayerGroup);
-      L.circleMarker(p2, { radius: 5, color: '#ffeb3b', fillColor: '#ffeb3b', fillOpacity: 0.8 }).addTo(measureLayerGroup);
-      appendLog(`Leg distance: ${dist > 1000 ? (dist / 1000).toFixed(2) + ' km' : dist.toFixed(1) + ' m'}`, 'success');
-    }
-  }
-}
-
-function startDropWaypoint() {
-  isDroppingWaypoint = true;
-  appendLog('📍 Click anywhere on the map to place a waypoint marker', 'info');
-}
-
-function openWaypointModal(lat, lon) {
-  pendingWaypointCoord = { lat, lon };
-  const coordPrev = document.getElementById('wpCoordsPreview');
-  if (coordPrev) coordPrev.textContent = `Coordinates: ${lat.toFixed(6)}°, ${lon.toFixed(6)}°`;
-  const modal = document.getElementById('waypointModal');
-  if (modal) modal.style.display = 'flex';
-}
-
-function closeWaypointModal() {
-  const modal = document.getElementById('waypointModal');
-  if (modal) modal.style.display = 'none';
-  pendingWaypointCoord = null;
-}
-
-async function saveWaypointConfirm() {
-  if (!pendingWaypointCoord) return;
-  const name = document.getElementById('wpName').value.trim() || 'Waypoint';
-  const category = document.getElementById('wpCategory').value;
-  const desc = document.getElementById('wpDesc').value.trim();
-
-  try {
-    const res = await fetch('/api/waypoints', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        name,
-        category,
-        description: desc,
-        lat: pendingWaypointCoord.lat,
-        lon: pendingWaypointCoord.lon
-      })
-    });
-    const data = await res.json();
-    if (data.success) {
-      appendLog(`Saved waypoint: ${name}`, 'success');
-      loadWaypoints();
-    }
-  } catch (e) {
-    appendLog(`Failed to save waypoint: ${e.message}`, 'error');
-  }
-  closeWaypointModal();
-}
-
-async function loadWaypoints() {
-  try {
-    const res = await fetch('/api/waypoints');
-    if (!res.ok) return;
-    const list = await res.json();
-    if (!waypointsLayerGroup) return;
-    waypointsLayerGroup.clearLayers();
-
-    list.forEach(wp => {
-      const pinIcon = L.divIcon({
-        className: 'wp-marker-div',
-        html: `<div class="wp-marker-pin" title="${escapeHtml(wp.name)}">📍</div>`,
-        iconSize: [24, 24],
-        iconAnchor: [12, 24]
-      });
-      const marker = L.marker([wp.lat, wp.lon], { icon: pinIcon }).addTo(waypointsLayerGroup);
-      marker.bindPopup(`
-        <div style="color:#090d14; font-family:sans-serif;">
-          <b>${escapeHtml(wp.name)}</b><br>
-          <span style="font-size:0.8rem; color:#666;">${escapeHtml(wp.category)}</span><br>
-          <span style="font-size:0.75rem;">${escapeHtml(wp.description || '')}</span><br>
-          <button style="margin-top:6px; background:#e53935; color:#fff; border:none; padding:4px 8px; border-radius:4px; cursor:pointer;" onclick="deleteWaypoint('${wp.id}')">Delete</button>
-        </div>
-      `);
-    });
-  } catch (_) {}
-}
-
-async function deleteWaypoint(id) {
-  try {
-    await fetch(`/api/waypoints/delete?id=${encodeURIComponent(id)}`, { method: 'POST' });
-    loadWaypoints();
-    appendLog('Deleted waypoint marker', 'info');
-  } catch (_) {}
-}
-
-function startDrawField() {
-  if (isDrawingField) {
-    finishFieldDrawing();
-    return;
-  }
-  isDrawingField = true;
-  fieldDrawPoints = [];
-  if (fieldDrawPolyline) {
-    leafletMap.removeLayer(fieldDrawPolyline);
-    fieldDrawPolyline = null;
-  }
-  const btn = document.getElementById('btnDrawField');
-  if (btn) btn.classList.add('active');
-  appendLog('📐 Field Drawing active: Click vertices on map. Click 📐 button again when done.', 'info');
-}
-
-function finishFieldDrawing() {
-  isDrawingField = false;
-  const btn = document.getElementById('btnDrawField');
+function zoomRadar(factor) {
+  isRadarAutoFit = false;
+  const btn = document.getElementById('btnRadarAutoFit');
   if (btn) btn.classList.remove('active');
 
-  if (fieldDrawPoints.length < 3) {
-    appendLog('Field polygon requires at least 3 points', 'error');
-    if (fieldDrawPolyline) leafletMap.removeLayer(fieldDrawPolyline);
-    return;
-  }
-
-  const areaM2 = calculatePolygonArea(fieldDrawPoints);
-  const ha = areaM2 / 10000;
-  const acres = areaM2 * 0.000247105;
-  const perim = calculatePolygonPerimeter(fieldDrawPoints);
-
-  const elHa = document.getElementById('fieldAreaHectares');
-  const elAcres = document.getElementById('fieldAreaAcres');
-  const elPerim = document.getElementById('fieldPerimeter');
-  if (elHa) elHa.textContent = `${ha.toFixed(2)} ha`;
-  if (elAcres) elAcres.textContent = `${acres.toFixed(2)} acres`;
-  if (elPerim) elPerim.textContent = `${perim.toFixed(1)} m`;
-
-  const modal = document.getElementById('fieldModal');
-  if (modal) modal.style.display = 'flex';
+  radarRangeMeters = Math.min(10000, Math.max(15, Math.round(radarRangeMeters * factor)));
+  appendLog(`Radar range: ${radarRangeMeters}m`, 'info');
+  renderRadar();
 }
 
-function closeFieldModal() {
-  const modal = document.getElementById('fieldModal');
-  if (modal) modal.style.display = 'none';
-  if (fieldDrawPolyline) {
-    leafletMap.removeLayer(fieldDrawPolyline);
-    fieldDrawPolyline = null;
-  }
+function toggleRadarAutoFit() {
+  isRadarAutoFit = !isRadarAutoFit;
+  const btn = document.getElementById('btnRadarAutoFit');
+  if (btn) btn.classList.toggle('active', isRadarAutoFit);
+  appendLog(`Auto Range Fit: ${isRadarAutoFit ? 'ON' : 'OFF'}`, 'info');
 }
 
-async function saveFieldConfirm() {
-  const name = document.getElementById('fieldName').value.trim() || 'Field';
-  const pts = fieldDrawPoints.map(p => [p.lat, p.lng]);
-  try {
-    const res = await fetch('/api/fields', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name, points: pts })
-    });
-    const data = await res.json();
-    if (data.success) {
-      appendLog(`Saved field boundary: ${name}`, 'success');
-      loadFields();
-    }
-  } catch (e) {
-    appendLog(`Error saving field: ${e.message}`, 'error');
-  }
-  closeFieldModal();
-}
-
-async function loadFields() {
-  try {
-    const res = await fetch('/api/fields');
-    if (!res.ok) return;
-    const fields = await res.json();
-    if (!fieldsLayerGroup) return;
-    fieldsLayerGroup.clearLayers();
-
-    const select = document.getElementById('geofenceFieldSelect');
-    if (select) {
-      select.innerHTML = '<option value="">Circular Radius Around Home</option>';
-    }
-
-    fields.forEach(f => {
-      const polygon = L.polygon(f.points, {
-        color: '#00e676',
-        weight: 2,
-        fillColor: '#00e676',
-        fillOpacity: 0.15
-      }).addTo(fieldsLayerGroup);
-
-      polygon.bindPopup(`
-        <div style="color:#090d14; font-family:sans-serif;">
-          <b>${escapeHtml(f.name)}</b><br>
-          <span>Area: <b>${f.areaHectares.toFixed(2)} ha</b> (${f.areaAcres.toFixed(2)} acres)</span><br>
-          <span>Perimeter: ${f.perimeterMeters.toFixed(1)} m</span><br>
-          <button style="margin-top:6px; background:#e53935; color:#fff; border:none; padding:4px 8px; border-radius:4px; cursor:pointer;" onclick="deleteField('${f.id}')">Delete Field</button>
-        </div>
-      `);
-
-      if (select) {
-        const opt = document.createElement('option');
-        opt.value = f.id;
-        opt.textContent = `${f.name} (${f.areaHectares.toFixed(1)} ha)`;
-        select.appendChild(opt);
-      }
-    });
-  } catch (_) {}
-}
-
-async function deleteField(id) {
-  try {
-    await fetch(`/api/fields/delete?id=${encodeURIComponent(id)}`, { method: 'POST' });
-    loadFields();
-    appendLog('Deleted field boundary polygon', 'info');
-  } catch (_) {}
-}
-
-function toggleMeasureTool() {
-  isMeasuring = !isMeasuring;
-  const btn = document.getElementById('btnMeasure');
-  if (btn) btn.classList.toggle('active', isMeasuring);
-
-  if (!isMeasuring) {
-    measurePoints = [];
-    if (measureLayerGroup) measureLayerGroup.clearLayers();
-    appendLog('Measure tool deactivated', 'info');
-  } else {
-    measurePoints = [];
-    if (measureLayerGroup) measureLayerGroup.clearLayers();
-    appendLog('📏 Distance Measure active: Click points on map to measure path distance', 'info');
+function setAdminHere() {
+  if (navigator.geolocation) {
+    navigator.geolocation.getCurrentPosition(
+      (pos) => {
+        adminPosition = {
+          lat: pos.coords.latitude,
+          lon: pos.coords.longitude,
+          label: 'Admin (GPS)'
+        };
+        appendLog(`Locked Admin location to Phone GPS: ${adminPosition.lat.toFixed(5)}, ${adminPosition.lon.toFixed(5)}`, 'success');
+        clearRadarTrail();
+        renderRadar();
+      },
+      () => {
+        if (dronePosition) {
+          adminPosition = {
+            lat: dronePosition.lat,
+            lon: dronePosition.lon,
+            label: 'Admin (Manual Lock)'
+          };
+          appendLog(`Locked Admin location to current drone coordinate`, 'success');
+          clearRadarTrail();
+          renderRadar();
+        } else {
+          alert('No GPS fix available to set Admin position.');
+        }
+      },
+      { enableHighAccuracy: true, timeout: 5000 }
+    );
+  } else if (dronePosition) {
+    adminPosition = {
+      lat: dronePosition.lat,
+      lon: dronePosition.lon,
+      label: 'Admin (Manual Lock)'
+    };
+    appendLog(`Locked Admin location to current drone position`, 'success');
+    clearRadarTrail();
+    renderRadar();
   }
 }
 
-function setAdminPositionPrompt() {
-  const coord = prompt('Enter your Ground Station Admin latitude,longitude (or click OK to use current map center):');
-  let lat, lon;
-  if (coord && coord.includes(',')) {
-    const parts = coord.split(',');
-    lat = parseFloat(parts[0].trim());
-    lon = parseFloat(parts[1].trim());
-  } else if (leafletMap) {
-    const c = leafletMap.getCenter();
-    lat = c.lat;
-    lon = c.lng;
-  }
-  if (!lat || !lon) return;
-
-  if (adminMarker) {
-    adminMarker.setLatLng([lat, lon]);
-  } else {
-    const adminIcon = L.divIcon({
-      className: 'admin-marker-div',
-      html: `<div class="admin-marker-badge">👤 ADMIN GCS</div>`,
-      iconSize: [80, 24],
-      iconAnchor: [40, 12]
-    });
-    adminMarker = L.marker([lat, lon], { icon: adminIcon }).addTo(leafletMap);
-  }
-  appendLog(`Placed Admin GCS marker at: ${lat.toFixed(6)}, ${lon.toFixed(6)}`, 'success');
+function clearRadarTrail() {
+  droneRelativeTrail = [];
+  appendLog('Cleared relative flight trail', 'info');
+  renderRadar();
 }
 
 // ==========================================================================
-// Geofence Safety Boundary
-// ==========================================================================
-
-let geofenceSettings = { active: false, radiusMeters: 300, fieldId: '' };
-
-function openGeofenceModal() {
-  const modal = document.getElementById('geofenceModal');
-  if (modal) modal.style.display = 'flex';
-  loadGeofence();
-}
-
-function closeGeofenceModal() {
-  const modal = document.getElementById('geofenceModal');
-  if (modal) modal.style.display = 'none';
-}
-
-async function loadGeofence() {
-  try {
-    const res = await fetch('/api/geofence');
-    if (!res.ok) return;
-    const data = await res.json();
-    geofenceSettings = data;
-
-    const btnOn = document.getElementById('btnGeofenceOn');
-    const btnOff = document.getElementById('btnGeofenceOff');
-    if (btnOn) btnOn.classList.toggle('active', data.active);
-    if (btnOff) btnOff.classList.toggle('active', !data.active);
-
-    const slider = document.getElementById('geofenceRadiusSlider');
-    const lbl = document.getElementById('lblGeofenceRadius');
-    if (slider) slider.value = data.radiusMeters;
-    if (lbl) lbl.textContent = Math.round(data.radiusMeters);
-
-    const select = document.getElementById('geofenceFieldSelect');
-    if (select && data.fieldId) select.value = data.fieldId;
-
-    renderGeofenceOverlay();
-  } catch (_) {}
-}
-
-function toggleGeofenceEnabled(active) {
-  geofenceSettings.active = active;
-  const btnOn = document.getElementById('btnGeofenceOn');
-  const btnOff = document.getElementById('btnGeofenceOff');
-  if (btnOn) btnOn.classList.toggle('active', active);
-  if (btnOff) btnOff.classList.toggle('active', !active);
-
-  saveGeofenceSettings();
-}
-
-function updateGeofenceRadiusUI(val) {
-  geofenceSettings.radiusMeters = parseFloat(val);
-  const lbl = document.getElementById('lblGeofenceRadius');
-  if (lbl) lbl.textContent = Math.round(val);
-  renderGeofenceOverlay();
-  saveGeofenceSettings();
-}
-
-function updateGeofenceField(fieldId) {
-  geofenceSettings.fieldId = fieldId;
-  saveGeofenceSettings();
-}
-
-async function saveGeofenceSettings() {
-  try {
-    await fetch('/api/geofence', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(geofenceSettings)
-    });
-    renderGeofenceOverlay();
-  } catch (_) {}
-}
-
-function renderGeofenceOverlay() {
-  if (!geofenceLayerGroup) return;
-  geofenceLayerGroup.clearLayers();
-
-  if (!geofenceSettings.active) return;
-
-  if (lastTelemetry && lastTelemetry.homeLat && lastTelemetry.homeLon) {
-    L.circle([lastTelemetry.homeLat, lastTelemetry.homeLon], {
-      radius: geofenceSettings.radiusMeters,
-      color: '#ff1744',
-      weight: 2,
-      dashArray: '6, 6',
-      fillColor: '#ff1744',
-      fillOpacity: 0.08
-    }).addTo(geofenceLayerGroup);
-  }
-}
-
-function triggerGeofenceAlert(reason) {
-  const banner = document.getElementById('geofenceAlertBanner');
-  const text = document.getElementById('geofenceAlertText');
-  if (banner) banner.style.display = 'flex';
-  if (text) text.textContent = `🚨 GEOFENCE BREACH: ${reason || 'Drone outside safety boundary!'}`;
-  appendLog(`🚨 GEOFENCE BREACH DETECTED: ${reason || 'Outside boundary'}`, 'error');
-  playSound('sound_effect_1.mp3');
-}
-
-function dismissGeofenceAlert() {
-  const banner = document.getElementById('geofenceAlertBanner');
-  if (banner) banner.style.display = 'none';
-  stopSound();
-}
-
-// ==========================================================================
-// Offline Map Manager (MBTiles & Area Downloader)
-// ==========================================================================
-
-let mapDownloadPollTimer = null;
-
-function openMapsModal() {
-  const modal = document.getElementById('mapsModal');
-  if (modal) modal.style.display = 'flex';
-  loadMapLayersList();
-}
-
-function closeMapsModal() {
-  const modal = document.getElementById('mapsModal');
-  if (modal) modal.style.display = 'none';
-  if (mapDownloadPollTimer) clearInterval(mapDownloadPollTimer);
-}
-
-function switchMapModalTab(tab) {
-  const secLayers = document.getElementById('secMapLayers');
-  const secDownload = document.getElementById('secMapDownload');
-  const tabLayers = document.getElementById('tabMapLayers');
-  const tabDownload = document.getElementById('tabMapDownload');
-
-  if (tab === 'layers') {
-    if (secLayers) secLayers.style.display = 'block';
-    if (secDownload) secDownload.style.display = 'none';
-    if (tabLayers) tabLayers.classList.add('active');
-    if (tabDownload) tabDownload.classList.remove('active');
-    loadMapLayersList();
-  } else {
-    if (secLayers) secLayers.style.display = 'none';
-    if (secDownload) secDownload.style.display = 'block';
-    if (tabLayers) tabLayers.classList.remove('active');
-    if (tabDownload) tabDownload.classList.add('active');
-  }
-}
-
-async function loadMapLayersList() {
-  const container = document.getElementById('mapLayersList');
-  if (!container) return;
-
-  try {
-    const res = await fetch('/api/maps');
-    const layers = await res.json();
-    container.innerHTML = '';
-
-    if (!layers || layers.length === 0) {
-      container.innerHTML = '<span style="color:#8b9bb4; font-size:0.8rem; padding:8px; display:block;">No offline MBTiles layers found on phone storage. Use the "Download Map Area" tab or import .mbtiles into Documents/DroneCam/Maps.</span>';
-      return;
-    }
-
-    layers.forEach(layer => {
-      const card = document.createElement('div');
-      card.className = 'recording-card';
-      const sizeMb = (layer.sizeBytes / (1024 * 1024)).toFixed(1);
-      const isSelected = activeMapLayerName === layer.id;
-
-      card.innerHTML = `
-        <div class="recording-card-title">🗺️ ${escapeHtml(layer.name)} ${isSelected ? '<span class="chip-badge">ACTIVE</span>' : ''}</div>
-        <div class="recording-card-meta">
-          <span>Zooms: ${layer.minZoom}-${layer.maxZoom}</span>
-          <span>💾 ${sizeMb} MB</span>
-        </div>
-        <div class="recording-btn-row">
-          <button class="btn-card btn-card-play" onclick="selectMapLayer('${escapeJs(layer.id)}')">
-            ${isSelected ? 'Active Layer' : 'Set as Active Map'}
-          </button>
-          <button class="btn-card btn-card-delete" onclick="deleteMapLayer('${escapeJs(layer.id)}')">
-            🗑
-          </button>
-        </div>
-      `;
-      container.appendChild(card);
-    });
-  } catch (_) {
-    container.innerHTML = '<span style="color:#e53935; font-size:0.8rem;">Failed to fetch map layers</span>';
-  }
-}
-
-function selectMapLayer(id) {
-  setupTileLayer(id);
-  loadMapLayersList();
-  appendLog(`Active offline map layer set to: ${id}`, 'success');
-}
-
-async function deleteMapLayer(id) {
-  if (!confirm(`Delete map layer "${id}" from phone storage?`)) return;
-  try {
-    await fetch(`/api/maps/delete?id=${encodeURIComponent(id)}`, { method: 'POST' });
-    loadMapLayersList();
-    appendLog(`Deleted map layer: ${id}`, 'info');
-  } catch (_) {}
-}
-
-let downloadBounds = null;
-
-function useCurrentMapBoundsForDownload() {
-  if (!leafletMap) return;
-  const b = leafletMap.getBounds();
-  downloadBounds = {
-    minLat: b.getSouth(),
-    minLon: b.getWest(),
-    maxLat: b.getNorth(),
-    maxLon: b.getEast()
-  };
-  const summary = document.getElementById('dlBoundsSummary');
-  if (summary) {
-    summary.textContent = `Selected Area: [${downloadBounds.minLat.toFixed(4)}, ${downloadBounds.minLon.toFixed(4)}] to [${downloadBounds.maxLat.toFixed(4)}, ${downloadBounds.maxLon.toFixed(4)}]`;
-  }
-  appendLog('Map bounding box captured for offline download', 'info');
-}
-
-async function estimateMapDownload() {
-  if (!downloadBounds) useCurrentMapBoundsForDownload();
-  const minZ = parseInt(document.getElementById('dlMinZoom').value, 10) || 11;
-  const maxZ = parseInt(document.getElementById('dlMaxZoom').value, 10) || 16;
-  const resultDiv = document.getElementById('dlEstimateResult');
-
-  try {
-    const res = await fetch(`/api/maps/estimate?minLat=${downloadBounds.minLat}&minLon=${downloadBounds.minLon}&maxLat=${downloadBounds.maxLat}&maxLon=${downloadBounds.maxLon}&minZoom=${minZ}&maxZoom=${maxZ}`);
-    const data = await res.json();
-    if (resultDiv) {
-      resultDiv.style.display = 'block';
-      resultDiv.textContent = `Estimated Tiles: ${data.totalTiles.toLocaleString()} (~${data.estMb} MB storage)`;
-    }
-  } catch (e) {
-    appendLog(`Estimate error: ${e.message}`, 'error');
-  }
-}
-
-async function startMapAreaDownload() {
-  if (!downloadBounds) useCurrentMapBoundsForDownload();
-  const name = document.getElementById('dlMapName').value.trim() || 'flight_area';
-  const urlTemplate = document.getElementById('dlUrlTemplate').value.trim();
-  const minZ = parseInt(document.getElementById('dlMinZoom').value, 10) || 11;
-  const maxZ = parseInt(document.getElementById('dlMaxZoom').value, 10) || 16;
-
-  if (!urlTemplate) {
-    alert('Please provide a valid tile server URL template.');
-    return;
-  }
-
-  try {
-    const res = await fetch('/api/maps/download', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        name,
-        urlTemplate,
-        minLat: downloadBounds.minLat,
-        minLon: downloadBounds.minLon,
-        maxLat: downloadBounds.maxLat,
-        maxLon: downloadBounds.maxLon,
-        minZoom: minZ,
-        maxZoom: maxZ
-      })
-    });
-    const data = await res.json();
-    if (data.success) {
-      appendLog(`Started offline map download: ${name}`, 'success');
-      showDownloadControls(true);
-      startPollingDownloadProgress();
-    } else {
-      appendLog('Could not start download', 'error');
-    }
-  } catch (e) {
-    appendLog(`Download start error: ${e.message}`, 'error');
-  }
-}
-
-function showDownloadControls(isDownloading) {
-  const pCont = document.getElementById('dlProgressContainer');
-  const btnStart = document.getElementById('btnStartDl');
-  const btnPause = document.getElementById('btnPauseDl');
-  const btnCancel = document.getElementById('btnCancelDl');
-
-  if (pCont) pCont.style.display = isDownloading ? 'block' : 'none';
-  if (btnStart) btnStart.style.display = isDownloading ? 'none' : 'inline-block';
-  if (btnPause) btnPause.style.display = isDownloading ? 'inline-block' : 'none';
-  if (btnCancel) btnCancel.style.display = isDownloading ? 'inline-block' : 'none';
-}
-
-function startPollingDownloadProgress() {
-  if (mapDownloadPollTimer) clearInterval(mapDownloadPollTimer);
-  mapDownloadPollTimer = setInterval(async () => {
-    try {
-      const res = await fetch('/api/maps/download/progress');
-      const data = await res.json();
-      const pBar = document.getElementById('dlProgressBar');
-      const pText = document.getElementById('dlProgressText');
-
-      if (pBar) pBar.style.width = `${data.percent}%`;
-      if (pText) pText.textContent = `${data.downloaded} / ${data.total} tiles (${data.percent}%) - Status: ${data.status}`;
-
-      if (data.status === 'completed' || data.status === 'idle') {
-        clearInterval(mapDownloadPollTimer);
-        showDownloadControls(false);
-        appendLog('★ Map area download complete and saved to MBTiles!', 'success');
-        loadMapLayersList();
-      }
-    } catch (_) {}
-  }, 1000);
-}
-
-async function pauseMapDownload() {
-  await fetch('/api/maps/download/pause', { method: 'POST' });
-  appendLog('Map download paused', 'info');
-}
-
-async function cancelMapDownload() {
-  await fetch('/api/maps/download/cancel', { method: 'POST' });
-  if (mapDownloadPollTimer) clearInterval(mapDownloadPollTimer);
-  showDownloadControls(false);
-  appendLog('Map download cancelled', 'info');
-}
-
-// ==========================================================================
-// Flight Tracks & Black-Box History
-// ==========================================================================
-
-function openTracksModal() {
-  const modal = document.getElementById('tracksModal');
-  if (modal) modal.style.display = 'flex';
-  loadTracksList();
-}
-
-function closeTracksModal() {
-  const modal = document.getElementById('tracksModal');
-  if (modal) modal.style.display = 'none';
-}
-
-async function loadTracksList() {
-  const listEl = document.getElementById('tracksList');
-  if (!listEl) return;
-
-  try {
-    const res = await fetch('/api/tracks');
-    const tracks = await res.json();
-    listEl.innerHTML = '';
-
-    if (!tracks || tracks.length === 0) {
-      listEl.innerHTML = '<span style="color:#8b9bb4; font-size:0.8rem; padding:8px; display:block;">No flight track sessions recorded yet.</span>';
-      return;
-    }
-
-    tracks.forEach(track => {
-      const card = document.createElement('div');
-      card.className = 'recording-card';
-      const durSec = Math.round(track.durationMs / 1000);
-      const mins = Math.floor(durSec / 60);
-      const secs = durSec % 60;
-
-      card.innerHTML = `
-        <div class="recording-card-title">📈 ${escapeHtml(track.sessionName)}</div>
-        <div class="recording-card-meta">
-          <span>Points: <b>${track.pointCount}</b></span>
-          <span>Duration: <b>${mins}m ${secs}s</b></span>
-        </div>
-        <div class="recording-btn-row">
-          <a class="btn-card btn-card-download" href="/api/tracks/export?sessionId=${encodeURIComponent(track.sessionId)}&format=gpx" download="${track.sessionName}.gpx" title="Export GPX (Google Earth / QGIS)">
-            GPX
-          </a>
-          <a class="btn-card btn-card-download" href="/api/tracks/export?sessionId=${encodeURIComponent(track.sessionId)}&format=kml" download="${track.sessionName}.kml" title="Export KML">
-            KML
-          </a>
-          <a class="btn-card btn-card-download" href="/api/tracks/export?sessionId=${encodeURIComponent(track.sessionId)}&format=csv" download="${track.sessionName}.csv" title="Export CSV Spreadsheet">
-            CSV
-          </a>
-          <button class="btn-card btn-card-play" onclick="loadTrackOnMap('${escapeJs(track.sessionId)}')" title="Display on Live Map">
-            ▶ View
-          </button>
-          <button class="btn-card btn-card-delete" onclick="deleteTrackSession('${escapeJs(track.sessionId)}')">
-            🗑
-          </button>
-        </div>
-      `;
-      listEl.appendChild(card);
-    });
-  } catch (_) {
-    listEl.innerHTML = '<span style="color:#e53935; font-size:0.8rem;">Failed to fetch flight tracks</span>';
-  }
-}
-
-async function loadTrackOnMap(sessionId) {
-  try {
-    const res = await fetch(`/api/tracks/points?sessionId=${encodeURIComponent(sessionId)}`);
-    const points = await res.json();
-    if (!points || !points.length) {
-      appendLog('No points in selected track', 'info');
-      return;
-    }
-
-    flightTrackPoints = [];
-    if (flightTrackLine) flightTrackLine.setLatLngs([]);
-
-    points.forEach(p => {
-      addTrackPoint(p.lat, p.lon, p.speedKmh, p.altitudeBaro, p.timestamp);
-    });
-
-    fitTrackToBounds();
-    closeTracksModal();
-    appendLog(`Loaded previous track session on map (${points.length} points)`, 'success');
-  } catch (e) {
-    appendLog(`Could not load track: ${e.message}`, 'error');
-  }
-}
-
-async function deleteTrackSession(sessionId) {
-  if (!confirm('Are you sure you want to delete this flight track session?')) return;
-  try {
-    await fetch(`/api/tracks/delete?sessionId=${encodeURIComponent(sessionId)}`, { method: 'POST' });
-    loadTracksList();
-    appendLog('Deleted flight track session', 'info');
-  } catch (_) {}
-}
-
-// ==========================================================================
-// Geotagged Photo Snapshots Gallery & Map Pins
-// ==========================================================================
-
-function openPhotosModal() {
-  const modal = document.getElementById('photosModal');
-  if (modal) modal.style.display = 'flex';
-  loadPhotosGallery();
-}
-
-function closePhotosModal() {
-  const modal = document.getElementById('photosModal');
-  if (modal) modal.style.display = 'none';
-}
-
-async function loadPhotosGallery() {
-  const grid = document.getElementById('photosGrid');
-  if (!grid) return;
-
-  try {
-    const res = await fetch('/api/photos');
-    const photos = await res.json();
-    grid.innerHTML = '';
-
-    if (!photos || photos.length === 0) {
-      grid.innerHTML = '<span style="color:#8b9bb4; font-size:0.8rem; padding:8px; display:block;">No geotagged photos captured yet. Use the SNAP button on top to capture high-res snapshots.</span>';
-      return;
-    }
-
-    photos.forEach(photo => {
-      const card = document.createElement('div');
-      card.className = 'photo-card';
-      card.innerHTML = `
-        <img src="/photos/${encodeURIComponent(photo.fileName)}" alt="${escapeHtml(photo.fileName)}" style="width:100%; height:120px; object-fit:cover; border-radius:4px; display:block; background:#000;">
-        <div style="font-size:0.75rem; font-weight:bold; margin-top:6px; color:#fff; word-break:break-all;">${escapeHtml(photo.fileName)}</div>
-        <div style="font-size:0.7rem; color:#8b9bb4;">Lat: ${photo.lat.toFixed(5)}° Lon: ${photo.lon.toFixed(5)}°</div>
-        <div style="font-size:0.7rem; color:#00e5ff;">Alt: ${photo.altitude.toFixed(1)}m</div>
-        <div class="recording-btn-row" style="margin-top:6px;">
-          <a class="btn-card btn-card-download" href="/photos/${encodeURIComponent(photo.fileName)}?download=1" download="${escapeHtml(photo.fileName)}">⬇ Save</a>
-          <button class="btn-card btn-card-delete" onclick="deletePhoto('${escapeJs(photo.fileName)}')">🗑</button>
-        </div>
-      `;
-      grid.appendChild(card);
-    });
-  } catch (_) {
-    grid.innerHTML = '<span style="color:#e53935; font-size:0.8rem;">Failed to fetch photos</span>';
-  }
-}
-
-async function loadPhotosPins() {
-  try {
-    const res = await fetch('/api/photos');
-    if (!res.ok) return;
-    const photos = await res.json();
-    if (!photosLayerGroup) return;
-    photosLayerGroup.clearLayers();
-
-    photos.forEach(photo => {
-      if (photo.lat && photo.lon) {
-        const pinIcon = L.divIcon({
-          className: 'photo-marker-div',
-          html: `<div class="photo-marker-badge" title="${escapeHtml(photo.fileName)}">📸</div>`,
-          iconSize: [26, 26],
-          iconAnchor: [13, 13]
-        });
-        const marker = L.marker([photo.lat, photo.lon], { icon: pinIcon }).addTo(photosLayerGroup);
-        marker.bindPopup(`
-          <div style="color:#090d14; font-family:sans-serif; max-width:220px;">
-            <img src="/photos/${encodeURIComponent(photo.fileName)}" style="width:100%; border-radius:4px; margin-bottom:4px;">
-            <b style="font-size:0.8rem;">${escapeHtml(photo.fileName)}</b><br>
-            <span style="font-size:0.75rem; color:#555;">GPS: ${photo.lat.toFixed(5)}°, ${photo.lon.toFixed(5)}°</span><br>
-            <span style="font-size:0.75rem; color:#0288d1;">Alt: ${photo.altitude.toFixed(1)}m</span><br>
-            <a href="/photos/${encodeURIComponent(photo.fileName)}?download=1" download style="display:inline-block; margin-top:6px; background:#00e676; color:#000; padding:3px 8px; border-radius:3px; text-decoration:none; font-weight:bold; font-size:0.75rem;">Download JPEG</a>
-          </div>
-        `);
-      }
-    });
-  } catch (_) {}
-}
-
-async function deletePhoto(fileName) {
-  if (!confirm(`Delete photo "${fileName}"?`)) return;
-  try {
-    await fetch(`/api/photos/delete?fileName=${encodeURIComponent(fileName)}`, { method: 'POST' });
-    loadPhotosGallery();
-    loadPhotosPins();
-    appendLog(`Deleted photo: ${fileName}`, 'info');
-  } catch (_) {}
-}
-
-// ==========================================================================
-// Dynamic Quality Preset & Sensor Calibration
+// Dynamic Quality Preset & Settings
 // ==========================================================================
 
 let currentQualityPreset = 'AUTO';
@@ -2473,7 +1931,7 @@ function setQualityPreset(preset) {
   currentQualityPreset = preset;
   updateQualityPresetUI(preset);
   sendCommand('set_camera_quality', { preset });
-  appendLog(`Quality preset set to: ${preset}`, 'info');
+  appendLog(`Camera quality preset set to: ${preset}`, 'info');
 }
 
 function updateQualityPresetUI(preset) {
@@ -2497,71 +1955,44 @@ function calibrateBarometer() {
   appendLog('Calibrating takeoff barometer baseline to 0.0m AGL...', 'info');
 }
 
-function setGpsUpdateRate(intervalMs) {
-  sendCommand('set_gps_rate', { intervalMs });
-  ['btnGpsRate2', 'btnGpsRate1', 'btnGpsRate05'].forEach(id => {
-    const b = document.getElementById(id);
-    if (b) b.classList.remove('active');
-  });
-  if (intervalMs === 500) {
-    const b = document.getElementById('btnGpsRate2');
-    if (b) b.classList.add('active');
-  } else if (intervalMs === 1000) {
-    const b = document.getElementById('btnGpsRate1');
-    if (b) b.classList.add('active');
-  } else {
-    const b = document.getElementById('btnGpsRate05');
-    if (b) b.classList.add('active');
-  }
-  appendLog(`GPS update rate set to: ${intervalMs} ms`, 'info');
+function resetGpsWatchdog() {
+  if (gpsWatchdogTimer) clearTimeout(gpsWatchdogTimer);
+  gpsWatchdogTimer = setTimeout(() => {
+    const elapsed = Math.round((Date.now() - (lastTelemetryTime || Date.now())) / 1000);
+    appendLog(`⚠️ Telemetry link quiet (${elapsed}s)`, 'error');
+    const elFix = document.getElementById('radarFixBadge');
+    if (elFix) {
+      elFix.textContent = `No Link (${elapsed}s)`;
+      elFix.className = 'fix-tag fix-lost';
+    }
+  }, 15000);
 }
 
 // ==========================================================================
-// Spherical Geometry Calculations
+// Math & Geography Helpers
 // ==========================================================================
 
 function calculateDistance(lat1, lon1, lat2, lon2) {
-  const R = 6371000; // Earth radius in meters
-  const dLat = (lat2 - lat1) * Math.PI / 180;
-  const dLon = (lon2 - lon1) * Math.PI / 180;
+  const R = 6371000;
+  const dLat = ((lat2 - lat1) * Math.PI) / 180;
+  const dLon = ((lon2 - lon1) * Math.PI) / 180;
   const a = Math.sin(dLat / 2) * Math.sin(dLat / 2) +
-            Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
+            Math.cos((lat1 * Math.PI) / 180) * Math.cos((lat2 * Math.PI) / 180) *
             Math.sin(dLon / 2) * Math.sin(dLon / 2);
   const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
   return R * c;
 }
 
 function calculateBearing(lat1, lon1, lat2, lon2) {
-  const y = Math.sin((lon2 - lon1) * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180);
-  const x = Math.cos(lat1 * Math.PI / 180) * Math.sin(lat2 * Math.PI / 180) -
-            Math.sin(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) * Math.cos((lon2 - lon1) * Math.PI / 180);
-  const brng = (Math.atan2(y, x) * 180 / Math.PI + 360) % 360;
+  const y = Math.sin(((lon2 - lon1) * Math.PI) / 180) * Math.cos((lat2 * Math.PI) / 180);
+  const x = Math.cos((lat1 * Math.PI) / 180) * Math.sin((lat2 * Math.PI) / 180) -
+            Math.sin((lat1 * Math.PI) / 180) * Math.cos((lat2 * Math.PI) / 180) * Math.cos(((lon2 - lon1) * Math.PI) / 180);
+  const brng = ((Math.atan2(y, x) * 180) / Math.PI + 360) % 360;
   return brng;
 }
 
-function calculatePolygonArea(latlngs) {
-  const R = 6378137;
-  if (latlngs.length < 3) return 0;
-  let total = 0;
-  for (let i = 0; i < latlngs.length; i++) {
-    const p1 = latlngs[i];
-    const p2 = latlngs[(i + 1) % latlngs.length];
-    const lat1 = p1.lat * Math.PI / 180;
-    const lat2 = p2.lat * Math.PI / 180;
-    const lon1 = p1.lng * Math.PI / 180;
-    const lon2 = p2.lng * Math.PI / 180;
-    total += (lon2 - lon1) * (2 + Math.sin(lat1) + Math.sin(lat2));
-  }
-  total = Math.abs(total * R * R / 2.0);
-  return total;
-}
-
-function calculatePolygonPerimeter(latlngs) {
-  let perim = 0;
-  for (let i = 0; i < latlngs.length; i++) {
-    const p1 = latlngs[i];
-    const p2 = latlngs[(i + 1) % latlngs.length];
-    perim += calculateDistance(p1.lat, p1.lng, p2.lat, p2.lng);
-  }
-  return perim;
+function getCardinal(deg) {
+  const dirs = ['N', 'NNE', 'NE', 'ENE', 'E', 'ESE', 'SE', 'SSE', 'S', 'SSW', 'SW', 'WSW', 'W', 'WNW', 'NW', 'NNW'];
+  const ix = Math.round(deg / 22.5) % 16;
+  return dirs[ix];
 }

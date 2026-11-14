@@ -89,6 +89,7 @@ class StreamingService : LifecycleService() {
     private var isAdaptiveQualityEnabled = true
     private var currentQualityPresetName = "AUTO"
     private var adaptiveQualityJob: Job? = null
+    private var isGpsStreamingEnabled = false // Bandwidth saving: only stream GPS when Radar tab is explicitly active
 
     override fun onCreate() {
         super.onCreate()
@@ -117,10 +118,12 @@ class StreamingService : LifecycleService() {
                 telemetry
             }
 
-            val json = finalTelemetry.toJson()
-            val sentOverDc = webRtcManager?.broadcastDataChannel(json.toString()) ?: false
-            if (!sentOverDc) {
-                serverManager?.broadcastJson(json)
+            if (isGpsStreamingEnabled) {
+                val json = finalTelemetry.toJson()
+                val sentOverDc = webRtcManager?.broadcastDataChannel(json.toString()) ?: false
+                if (!sentOverDc) {
+                    serverManager?.broadcastJson(json)
+                }
             }
 
             _uiState.value = _uiState.value.copy(telemetry = finalTelemetry)
@@ -355,18 +358,59 @@ class StreamingService : LifecycleService() {
             }
             "toggle_torch" -> {
                 val isOn = webRtcManager?.toggleTorch() ?: false
-                reply(JSONObject().apply {
+                val res = JSONObject().apply {
                     put("type", "ack")
                     put("cmd", "toggle_torch")
                     put("torchOn", isOn)
-                })
+                }
+                reply(res)
+                serverManager?.broadcastJson(res)
             }
             "toggle_strobe" -> {
                 val isStrobe = webRtcManager?.toggleStrobe() ?: false
-                reply(JSONObject().apply {
+                val res = JSONObject().apply {
                     put("type", "ack")
                     put("cmd", "toggle_strobe")
                     put("strobeOn", isStrobe)
+                }
+                reply(res)
+                serverManager?.broadcastJson(res)
+            }
+            "toggle_flicker" -> {
+                val isFlicker = webRtcManager?.toggleFlicker() ?: false
+                val res = JSONObject().apply {
+                    put("type", "ack")
+                    put("cmd", "toggle_flicker")
+                    put("flickerOn", isFlicker)
+                }
+                reply(res)
+                serverManager?.broadcastJson(res)
+            }
+            "set_gps_streaming" -> {
+                val enabled = command.optBoolean("enabled", true)
+                isGpsStreamingEnabled = enabled
+                Log.i(TAG, "GPS telemetry streaming to ground set to: $enabled")
+                val ack = JSONObject().apply {
+                    put("type", "ack")
+                    put("cmd", "set_gps_streaming")
+                    put("enabled", enabled)
+                }
+                reply(ack)
+                if (enabled) {
+                    val tel = gpsManager.currentTelemetry.value
+                    val telJson = tel.toJson()
+                    reply(telJson)
+                    serverManager?.broadcastJson(telJson)
+                }
+            }
+            "set_video_streaming" -> {
+                val enabled = command.optBoolean("enabled", true)
+                webRtcManager?.setVideoTrackEnabled(enabled)
+                Log.i(TAG, "WebRTC video transmission set to: $enabled")
+                reply(JSONObject().apply {
+                    put("type", "ack")
+                    put("cmd", "set_video_streaming")
+                    put("enabled", enabled)
                 })
             }
             "play_sound" -> {

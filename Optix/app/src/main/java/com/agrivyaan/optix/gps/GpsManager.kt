@@ -75,9 +75,9 @@ class GpsManager(
     var updateIntervalMs = 1000L // Default 1 Hz
     var accuracyThresholdMeters = 15.0f
 
-    // Watchdog
+    // Heartbeat Telemetry & Watchdog
     private var lastFixTimeMs = 0L
-    private var watchdogJob: Job? = null
+    private var telemetryHeartbeatJob: Job? = null
 
     init {
         rotationSensor = sensorManager.getDefaultSensor(Sensor.TYPE_ROTATION_VECTOR)
@@ -167,25 +167,55 @@ class GpsManager(
             if (locationManager.isProviderEnabled(LocationManager.NETWORK_PROVIDER)) {
                 locationManager.requestLocationUpdates(
                     LocationManager.NETWORK_PROVIDER,
-                    updateIntervalMs * 2,
+                    updateIntervalMs,
                     0f,
                     this,
                     Looper.getMainLooper()
                 )
             }
+
+            // Also register PASSIVE_PROVIDER if available
+            if (locationManager.isProviderEnabled(LocationManager.PASSIVE_PROVIDER)) {
+                locationManager.requestLocationUpdates(
+                    LocationManager.PASSIVE_PROVIDER,
+                    updateIntervalMs,
+                    0f,
+                    this,
+                    Looper.getMainLooper()
+                )
+            }
+
+            // Seed initial position from last known location immediately
+            val providers = listOf(
+                LocationManager.GPS_PROVIDER,
+                LocationManager.NETWORK_PROVIDER,
+                LocationManager.PASSIVE_PROVIDER
+            )
+            for (p in providers) {
+                try {
+                    if (locationManager.isProviderEnabled(p)) {
+                        val lastLoc = locationManager.getLastKnownLocation(p)
+                        if (lastLoc != null && (lastLoc.latitude != 0.0 || lastLoc.longitude != 0.0)) {
+                            Log.i(tag, "Seeded initial position from '$p': ${lastLoc.latitude}, ${lastLoc.longitude}")
+                            onLocationChanged(lastLoc)
+                            break
+                        }
+                    }
+                } catch (_: Exception) {}
+            }
         } catch (e: Exception) {
             Log.e(tag, "Error registering location updates", e)
         }
 
-        // 5. Start Watchdog loop to detect lost fixes
-        startWatchdog()
+        // 5. Start continuous telemetry heartbeat loop (always streams compass, barometer & status)
+        startTelemetryHeartbeat()
     }
 
     fun stop() {
         if (!isRunning.getAndSet(false)) return
         Log.i(tag, "Stopping GPS & Sensor Telemetry...")
-        watchdogJob?.cancel()
-        watchdogJob = null
+        telemetryHeartbeatJob?.cancel()
+        telemetryHeartbeatJob = null
 
         try {
             locationManager.removeUpdates(this)
@@ -413,25 +443,58 @@ class GpsManager(
     @Deprecated("Deprecated in Java")
     override fun onStatusChanged(provider: String?, status: Int, extras: android.os.Bundle?) {}
 
-    private fun startWatchdog() {
-        watchdogJob?.cancel()
-        watchdogJob = gpsScope.launch {
+    private fun startTelemetryHeartbeat() {
+        telemetryHeartbeatJob?.cancel()
+        telemetryHeartbeatJob = gpsScope.launch {
             while (isActive && isRunning.get()) {
-                delay(2000)
-                val now = SystemClock.elapsedRealtime()
-                val delta = now - lastFixTimeMs
-                if (lastFixTimeMs > 0 && delta > 10000) {
-                    // Lost fix for more than 10 seconds
-                    val lostTelemetry = _currentTelemetry.value.copy(
-                        status = "lost",
-                        fixType = "Searching",
-                        alertMessage = "GPS signal lost (>10s)"
-                    )
-                    _currentTelemetry.value = lostTelemetry
-                    onTelemetryUpdated(lostTelemetry)
-                }
+                delay(updateIntervalMs)
+                emitHeartbeatTelemetry()
             }
         }
+    }
+
+    private fun emitHeartbeatTelemetry() {
+        val curr = _currentTelemetry.value
+        val now = SystemClock.elapsedRealtime()
+        val delta = if (lastFixTimeMs > 0L) now - lastFixTimeMs else Long.MAX_VALUE
+
+        val (status, fixType, alert) = when {
+            lastFixTimeMs == 0L -> {
+                Triple(
+                    "searching",
+                    if (satellitesVisible > 0) "Searching ($satellitesVisible sats)" else "Searching",
+                    if (curr.rawLat != 0.0) null else "Acquiring GPS satellites..."
+                )
+            }
+            delta > 10000L -> {
+                Triple(
+                    "lost",
+                    if (satellitesVisible > 0) "Searching ($satellitesVisible sats)" else "Searching",
+                    "GPS signal weak/searching (${delta / 1000}s ago)"
+                )
+            }
+            else -> {
+                Triple(
+                    if (curr.status.isNotEmpty() && curr.status != "idle") curr.status else "locked",
+                    curr.fixType,
+                    curr.alertMessage
+                )
+            }
+        }
+
+        // Live heading from compass/gyro, and live relative baro altitude
+        val updated = curr.copy(
+            heading = compassHeading,
+            altitudeBaro = relativeBaroAltitude,
+            satellitesVisible = satellitesVisible,
+            satellitesUsed = satellitesUsed,
+            status = status,
+            fixType = fixType,
+            alertMessage = alert,
+            timestamp = System.currentTimeMillis()
+        )
+        _currentTelemetry.value = updated
+        onTelemetryUpdated(updated)
     }
 
     private fun recalculateAndEmit() {

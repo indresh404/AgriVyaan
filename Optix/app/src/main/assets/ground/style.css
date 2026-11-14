@@ -169,7 +169,8 @@ body {
 }
 
 /* Strobe button pulsing */
-.btn-top.btn-strobe.active {
+.btn-top.btn-strobe.active,
+.btn-action.btn-strobe.active {
   background: var(--accent-amber);
   color: #000;
   border-color: #ffd54f;
@@ -178,6 +179,19 @@ body {
 @keyframes strobePulse {
   from { box-shadow: 0 0 4px #ffb300; }
   to { box-shadow: 0 0 16px #ffb300; }
+}
+
+/* Fast Continuous Flicker button pulsing */
+.btn-top.btn-flicker.active,
+.btn-action.btn-flicker.active {
+  background: #ff0055;
+  color: #fff;
+  border-color: #ff4081;
+  animation: fastFlickerPulse 0.1s infinite alternate;
+}
+@keyframes fastFlickerPulse {
+  0% { box-shadow: 0 0 3px #ff4081; opacity: 0.85; transform: scale(0.98); }
+  100% { box-shadow: 0 0 18px #ff0055, 0 0 30px #ff4081; opacity: 1; transform: scale(1.02); }
 }
 
 .btn-top.active {
@@ -1058,107 +1072,270 @@ video.fill-mode {
   overflow: hidden;
 }
 
-/* 1. Video Only Fullscreen */
-.viewport-section.layout-video-big .video-box {
+/* 1. Video Only Fullscreen (Max bandwidth for video, zero GPS interference) */
+.viewport-section.layout-video .video-box {
   width: 100%;
   height: 100%;
   display: flex !important;
 }
-.viewport-section.layout-video-big .map-box {
+.viewport-section.layout-video .radar-box {
   display: none !important;
 }
 
-/* 2. Map Only Fullscreen */
-.viewport-section.layout-map-big .map-box {
+/* 2. Radar Only Fullscreen (Full bandwidth for radar, video stream paused) */
+.viewport-section.layout-radar .radar-box {
   width: 100%;
   height: 100%;
-  display: flex !important;
+  display: block !important;
 }
-.viewport-section.layout-map-big .video-box {
+.viewport-section.layout-radar .video-box {
   display: none !important;
-}
-
-/* 3. Split View (Side by side on desktop, stacked on mobile) */
-.viewport-section.layout-split {
-  flex-direction: row;
-}
-.viewport-section.layout-split .video-box {
-  width: 50%;
-  height: 100%;
-  display: flex !important;
-  border-right: 1px solid var(--border-color);
-}
-.viewport-section.layout-split .map-box {
-  width: 50%;
-  height: 100%;
-  display: flex !important;
-}
-
-@media (max-width: 820px) {
-  .viewport-section.layout-split {
-    flex-direction: column;
-  }
-  .viewport-section.layout-split .video-box {
-    width: 100%;
-    height: 50%;
-    border-right: none;
-    border-bottom: 1px solid var(--border-color);
-  }
-  .viewport-section.layout-split .map-box {
-    width: 100%;
-    height: 50%;
-  }
-}
-
-/* 4. Picture-in-Picture (PiP) */
-.viewport-section.layout-pip .video-box {
-  width: 100%;
-  height: 100%;
-  display: flex !important;
-}
-.viewport-section.layout-pip .map-box {
-  position: absolute;
-  bottom: 24px;
-  right: 24px;
-  width: 380px;
-  height: 270px;
-  z-index: 90;
-  display: flex !important;
-  border-radius: 8px;
-  border: 2px solid var(--accent-cyan);
-  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.85);
-  overflow: hidden;
-}
-
-@media (max-width: 600px) {
-  .viewport-section.layout-pip .map-box {
-    width: 260px;
-    height: 190px;
-    bottom: 12px;
-    right: 12px;
-  }
 }
 
 /* ==========================================================================
-   OFFLINE TACTICAL MAP CONTAINER & CANVAS
+   TACTICAL RADAR PLANE (ZERO MAPS, LIVE RELATIVE DISTANCE & BEARING)
    ========================================================================== */
-.map-box {
-  background: #090d13;
+.radar-box {
+  background: #06090f;
   width: 100%;
   height: 100%;
   position: relative;
+  overflow: hidden;
+  user-select: none;
 }
 
-.leaflet-map-canvas {
+.radar-canvas {
+  position: absolute;
+  top: 0;
+  left: 0;
   width: 100%;
   height: 100%;
-  background: #070a0e;
+  display: block;
+  background: radial-gradient(circle at center, #0a111a 0%, #06090f 100%);
 }
 
-/* Leaflet Dark HUD Overrides */
-.leaflet-container {
-  background: #090d14 !important;
-  font-family: inherit;
+/* Big Live Range & Compass Banner (Top Center of Radar) */
+.radar-target-banner {
+  position: absolute;
+  top: 12px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  z-index: 20;
+  pointer-events: none;
+  max-width: 95%;
+}
+
+.target-stat-pill {
+  background: rgba(10, 16, 26, 0.88);
+  border: 1px solid rgba(0, 229, 255, 0.35);
+  backdrop-filter: blur(8px);
+  border-radius: 8px;
+  padding: 6px 12px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.6);
+  pointer-events: auto;
+}
+
+.target-stat-pill .stat-icon {
+  font-size: 1.1rem;
+}
+
+.target-stat-pill .pill-col {
+  display: flex;
+  flex-direction: column;
+}
+
+.target-stat-pill .stat-label {
+  font-size: 0.6rem;
+  letter-spacing: 1px;
+  color: #8b9bb4;
+  font-weight: 800;
+  font-family: var(--hud-font);
+}
+
+.target-stat-pill .stat-value {
+  font-size: 1.05rem;
+  font-weight: 900;
+  font-family: var(--hud-font);
+  color: #fff;
+  white-space: nowrap;
+}
+
+.target-stat-pill .stat-value.highlight {
+  color: #ffd600;
+  text-shadow: 0 0 8px rgba(255, 214, 0, 0.4);
+}
+
+.target-stat-pill .stat-value.highlight-cyan {
+  color: #00e5ff;
+  text-shadow: 0 0 8px rgba(0, 229, 255, 0.4);
+}
+
+/* Radar Bottom Telemetry Strip */
+.radar-hud-bottom {
+  position: absolute;
+  bottom: 12px;
+  left: 12px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  z-index: 20;
+  pointer-events: none;
+}
+
+.radar-chip {
+  background: rgba(10, 16, 26, 0.85);
+  border: 1px solid var(--border-color);
+  backdrop-filter: blur(6px);
+  border-radius: 6px;
+  padding: 4px 8px;
+  font-size: 0.72rem;
+  font-family: var(--hud-font);
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  pointer-events: auto;
+  color: #cfd8dc;
+}
+
+.radar-chip .chip-label {
+  color: #8b9bb4;
+  font-size: 0.65rem;
+}
+
+.radar-chip .val-cyan {
+  color: #00e5ff;
+}
+
+.radar-chip .val-green {
+  color: #00e676;
+}
+
+.radar-chip .chip-sep {
+  color: #546e7a;
+  margin: 0 2px;
+}
+
+/* Clean Radar Floating Controls */
+.radar-quick-tools {
+  position: absolute;
+  bottom: 12px;
+  right: 12px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  z-index: 25;
+}
+
+.radar-tool-btn {
+  background: rgba(12, 19, 31, 0.9);
+  border: 1px solid rgba(0, 229, 255, 0.3);
+  color: #fff;
+  padding: 6px 10px;
+  border-radius: 6px;
+  font-family: var(--hud-font);
+  font-size: 0.75rem;
+  font-weight: 800;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  touch-action: manipulation;
+}
+
+.radar-tool-btn:hover {
+  background: rgba(0, 229, 255, 0.2);
+  border-color: #00e5ff;
+}
+
+.radar-tool-btn.active {
+  background: #00e5ff;
+  color: #000;
+  border-color: #00e5ff;
+  box-shadow: 0 0 10px rgba(0, 229, 255, 0.5);
+}
+
+/* Custom tactical map markers */
+.drone-map-marker-div {
+  background: transparent !important;
+  border: none !important;
+  box-shadow: none !important;
+}
+
+.drone-marker-inner {
+  width: 42px;
+  height: 42px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transform-origin: center center;
+  filter: drop-shadow(0 0 6px rgba(0, 229, 255, 0.7));
+  transition: transform 0.15s ease-out;
+}
+
+.drone-marker-inner.marker-stale {
+  filter: grayscale(1) opacity(0.5);
+}
+
+.home-marker-div, .admin-marker-div, .wp-marker-div, .photo-marker-div {
+  background: transparent !important;
+  border: none !important;
+  box-shadow: none !important;
+}
+
+.home-marker-badge {
+  background: rgba(18, 24, 38, 0.9);
+  color: #ffea00;
+  border: 1.5px solid #ffea00;
+  border-radius: 4px;
+  padding: 2px 6px;
+  font-size: 0.7rem;
+  font-weight: bold;
+  font-family: var(--hud-font);
+  text-align: center;
+  white-space: nowrap;
+  box-shadow: 0 0 8px rgba(255, 234, 0, 0.4);
+}
+
+.admin-marker-badge {
+  background: rgba(18, 24, 38, 0.9);
+  color: #00e5ff;
+  border: 1.5px solid #00e5ff;
+  border-radius: 4px;
+  padding: 2px 6px;
+  font-size: 0.7rem;
+  font-weight: bold;
+  font-family: var(--hud-font);
+  text-align: center;
+  white-space: nowrap;
+  box-shadow: 0 0 8px rgba(0, 229, 255, 0.4);
+}
+
+.wp-marker-pin {
+  font-size: 1.4rem;
+  filter: drop-shadow(0 2px 4px rgba(0, 0, 0, 0.8));
+  cursor: pointer;
+}
+
+.photo-marker-badge {
+  font-size: 1.2rem;
+  background: rgba(0, 0, 0, 0.7);
+  border: 1px solid #00e5ff;
+  border-radius: 50%;
+  width: 26px;
+  height: 26px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  box-shadow: 0 0 6px rgba(0, 229, 255, 0.5);
 }
 .leaflet-bar {
   border: 1px solid var(--border-color) !important;
@@ -1312,6 +1489,12 @@ video.fill-mode {
 .fix-tag {
   color: var(--accent-green);
   font-weight: bold;
+}
+.fix-tag.fix-searching {
+  color: var(--accent-amber);
+}
+.fix-tag.fix-lost {
+  color: #ff5252;
 }
 .speed-main {
   font-size: 0.85rem;
