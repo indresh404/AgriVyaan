@@ -1,6 +1,10 @@
 package com.agrivyaan.optix.server
 
 import android.content.Context
+import android.graphics.Bitmap
+import android.graphics.Canvas
+import android.graphics.Color
+import android.graphics.Paint
 import android.util.Log
 import com.agrivyaan.optix.audio.SoundManager
 import com.agrivyaan.optix.gps.GpsTelemetry
@@ -23,6 +27,7 @@ import kotlinx.coroutines.launch
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.ByteArrayInputStream
+import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.FileInputStream
 import java.io.InputStream
@@ -107,7 +112,11 @@ class ServerManager(
                     return withCors(response)
                 }
             }
-            return withCors(newFixedLengthResponse(Response.Status.NO_CONTENT, "image/png", ""))
+            // Return tactical dark placeholder tile if tile is not in offline MBTiles
+            val placeholder = getPlaceholderTile()
+            val response = newFixedLengthResponse(Response.Status.OK, "image/png", ByteArrayInputStream(placeholder), placeholder.size.toLong())
+            response.addHeader("Cache-Control", "public, max-age=86400")
+            return withCors(response)
         }
 
         // Available sounds list API
@@ -464,6 +473,63 @@ class ServerManager(
         } catch (e: Exception) {
             Log.e(TAG, "Error opening asset $assetPath", e)
             newFixedLengthResponse(Response.Status.NOT_FOUND, MIME_PLAINTEXT, "Asset not found: $assetPath")
+        }
+    }
+
+    @Volatile
+    private var cachedPlaceholderTile: ByteArray? = null
+
+    private fun getPlaceholderTile(): ByteArray {
+        val existing = cachedPlaceholderTile
+        if (existing != null) return existing
+
+        return synchronized(this) {
+            val d = cachedPlaceholderTile
+            if (d != null) return@synchronized d
+
+            try {
+                val bitmap = Bitmap.createBitmap(256, 256, Bitmap.Config.ARGB_8888)
+                val canvas = Canvas(bitmap)
+                canvas.drawColor(Color.rgb(13, 18, 28)) // Dark tactical canvas
+
+                val borderPaint = Paint().apply {
+                    color = Color.rgb(28, 38, 56)
+                    style = Paint.Style.STROKE
+                    strokeWidth = 1.5f
+                }
+                canvas.drawRect(0.5f, 0.5f, 255.5f, 255.5f, borderPaint)
+
+                val gridPaint = Paint().apply {
+                    color = Color.rgb(20, 28, 42)
+                    strokeWidth = 1f
+                }
+                canvas.drawLine(128f, 0f, 128f, 256f, gridPaint)
+                canvas.drawLine(0f, 128f, 256f, 128f, gridPaint)
+
+                val textPaint = Paint().apply {
+                    color = Color.rgb(75, 95, 125)
+                    textSize = 12f
+                    textAlign = Paint.Align.CENTER
+                    isAntiAlias = true
+                }
+                canvas.drawText("TACTICAL GRID", 128f, 122f, textPaint)
+
+                val subPaint = Paint().apply {
+                    color = Color.rgb(50, 65, 88)
+                    textSize = 10f
+                    textAlign = Paint.Align.CENTER
+                    isAntiAlias = true
+                }
+                canvas.drawText("No offline map here", 128f, 142f, subPaint)
+
+                val bos = ByteArrayOutputStream()
+                bitmap.compress(Bitmap.CompressFormat.PNG, 90, bos)
+                val bytes = bos.toByteArray()
+                cachedPlaceholderTile = bytes
+                bytes
+            } catch (e: Exception) {
+                ByteArray(0)
+            }
         }
     }
 
